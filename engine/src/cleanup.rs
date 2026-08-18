@@ -361,6 +361,11 @@ impl CleanupPipeline {
         &self.store
     }
 
+    /// 可变访问片段存储（T10 停止会话时冻结全部剩余 active 用）。
+    pub fn store_mut(&mut self) -> &mut SegmentStore {
+        &mut self.store
+    }
+
     pub fn scheduler(&self) -> &CleanupScheduler {
         &self.scheduler
     }

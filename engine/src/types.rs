@@ -171,4 +171,20 @@ pub trait LlmPort: Send {
     }
 
     fn summarize(&self, chunks: &[String]) -> String;
+
+    /// 流式纪要（T10）：语义同 [Self::cleanup_streaming]——`on_partial` 收到
+    /// **截至当前**的累积纪要文本，成功返回最终纪要。
+    ///
+    /// 默认实现走 [Self::summarize] 一次性回调（mock / 同步端口无需覆盖）；
+    /// 真实流式 LLM 覆盖本方法，把每个 delta 累积后回调。返回错误信息字符串
+    /// 时由调用方回退（纪要单批回退原文 / 汇总失败拼接各批部分纪要）。
+    fn summarize_streaming(
+        &self,
+        chunks: &[String],
+        on_partial: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        let out = self.summarize(chunks);
+        on_partial(&out);
+        Ok(out)
+    }
 }

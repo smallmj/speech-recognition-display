@@ -16,12 +16,23 @@
 //! 校验 + 失败回退），并把 [crate::cleanup::CleanupPipeline] 等导出，供 Tauri
 //! 壳层经「`tick` 派发 pending → 调真实 LLM → `apply_cleanup_result` / 
 //! `fail_pending` 回填」的异步路径驱动（T9 真实 LLM 接入）。
+//!
+//! T10 新增 [crate::minutes]：会议纪要编排（停止后分批 + 滚动上文 + 逐批
+//! 汇总），导出 [crate::minutes::chunk_for_summarize] 分批函数与
+//! [crate::minutes::summarize_minutes] 同步编排（LlmPort 注入，可测），
+//! 真实链路由 Tauri 壳按同一算法驱动（每批一个请求，全部完成后 emit
+//! `MinutesReady`）。
 
 mod cleanup;
+mod minutes;
 mod pipeline;
 mod types;
 
 pub use cleanup::{CleanupPipeline, CleanupScheduler, MockLlmPort, PendingCleanup, SegmentStore};
+pub use minutes::{
+    summarize_minutes, BATCH_MAX_CHARS, MAX_TOKENS, ROLLING_CONTEXT_CHARS, ROLLING_CONTEXT_MARKER,
+    chunk_for_summarize,
+};
 pub use pipeline::{speaker_color, Engine, MockAsrPort, SPEAKER_PALETTE};
 pub use types::{AsrPort, EmbeddingPort, EngineEvent, Gender, LlmPort, Segment, SegmentStatus, Utterance};
 
@@ -103,6 +114,28 @@ mod tests {
         let result = MockLlm.cleanup_streaming("口语原文", &mut |p| received.push(p.to_string()));
         assert_eq!(result.as_deref(), Ok("【口语原文】"));
         assert_eq!(received, vec!["【口语原文】"], "默认实现应回调一次全量结果");
+    }
+
+    /// T10 审查修复：`LlmPort::summarize_streaming` 默认实现走同步 `summarize`
+    /// 并回调一次全量（与 cleanup_streaming 对称；真实客户端覆盖为 SSE 流式）。
+    #[test]
+    fn summarize_streaming_default_invokes_callback_once_with_full_result() {
+        struct MockLlm;
+        impl LlmPort for MockLlm {
+            fn cleanup(&self, text: &str) -> String {
+                text.to_string()
+            }
+            fn summarize(&self, chunks: &[String]) -> String {
+                format!("要点：{}（共 {} 段）", chunks.join("；"), chunks.len())
+            }
+        }
+
+        let mut received: Vec<String> = Vec::new();
+        let result = MockLlm.summarize_streaming(&["第一段".into(), "第二段".into()], &mut |p| {
+            received.push(p.to_string());
+        });
+        assert_eq!(result.as_deref(), Ok("要点：第一段；第二段（共 2 段）"));
+        assert_eq!(received, vec!["要点：第一段；第二段（共 2 段）"], "默认实现应回调一次全量");
     }
 
     /// T1 骨架测试：三个端口 trait 可被 mock 实现（测试缝成立）。

@@ -8,18 +8,27 @@
 //!   `#[tauri::command]` 供前端保存/读取。API Key 明文存储是 MVP 的已知
 //!   取舍（规格未要求加密）。
 //! - **OpenAI 兼容 SSE 客户端**：[OpenAiLlmClient] 实现
-//!   [engine::LlmPort] 的 `cleanup_streaming`（阻塞式 POST
-//!   `{base_url}/chat/completions`，`Authorization: Bearer`，逐行解析
-//!   `data: {...}`，取 `choices[0].delta.content` 增量回调）。
+//!   [engine::LlmPort] 的 `cleanup_streaming` / `summarize_streaming`
+//!   （阻塞式 POST `{base_url}/chat/completions`，`Authorization: Bearer`，
+//!   逐行解析 `data: {...}`，取 `choices[0].delta.content` 增量回调；
+//!   非 SSE 响应整段解析兜底）。请求执行统一在 [OpenAiLlmClient::chat_once]。
 //! - **退避重试**：网络错误 / 非 2xx / SSE 解析错误 → 等比退避（500ms/1s/2s）
-//!   重试 3 次（共 4 次尝试），全部失败返回 [LlmError]，由驱动线程经
+//!   重试 3 次（共 [MAX_ATTEMPTS] 次尝试），全部失败返回错误，由驱动线程经
 //!   `fail_pending` 置 `Failed`，前端回退展示原文（对齐 ADR-0003「失败退避
 //!   重试 3 次后放弃」）。
 //! - **输入窗口**：ADR-0003「单次输入 ≤500 字」——超长原文按标点切分只送
-//!   首个完整窗口；滚动窗口 ≤2000 token 的约束在 [MAX_INPUT_CHARS] 注释说明。
+//!   首个完整窗口（[OpenAiLlmClient::clip_input_window]）；滚动窗口 ≤2000
+//!   token 的约束由 [MAX_INPUT_CHARS]（500 字 ≈ 500-700 token）与纪要分批
+//!   （engine `minutes::BATCH_MAX_CHARS` = 500 字 + 100 字滚动上文）共同满足。
 //!
 //! **整理人设**：[DEFAULT_PERSONA] 内置整理人设（参考 TypeFlux 意图整理人设：
 //! 去口语化/纠错/补标点/不改意）；`LlmConfig.persona` 为空时自动回退内置默认。
+//!
+//! **纪要人设**：[MINUTES_PERSONA] 内置纪要人设（T10）：把分批的会议原文
+//! 汇总为结构化会议纪要（【要点】【行动项】【待办】）。纪要走
+//! [engine::LlmPort::summarize_streaming]：`chunks` 为各批文本（或各批部分
+//! 纪要），user 消息按【第 N 段】标记拼接，与 engine 的分批编排（
+//! `engine::minutes::chunk_for_summarize`）配套使用。
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -40,6 +49,13 @@ const CONFIG_FILE: &str = "llm-config.json";
 /// **权威源在本文件**；前端 `src/components/LlmConfigPanel.tsx` 的
 /// `DEFAULT_PERSONA` 与此保持一致（「恢复内置人设」按钮用），改动需两处同步。
 pub const DEFAULT_PERSONA: &str = "你是实时字幕整理助手：把用户提供的口语化原文整理成通顺的书面语，去口语化、纠正错别字、补充标点，不改变原意，不添加原话没有的信息。直接输出整理结果，不要任何解释或前缀。";
+
+/// 内置纪要人设（系统提示词）：把分批的会议原文内容汇总为结构化会议纪要。
+///
+/// 对齐规格「纪要编排」：输出结构化纪要（要点/行动项/待办）。同一人设用于
+/// 两个阶段：逐批生成部分纪要（每个时间窗一份），再汇总为最终纪要
+/// （engine 的 `summarize_minutes` 算法，Tauri 壳用本客户端按同构路径驱动）。
+pub const MINUTES_PERSONA: &str = "你是会议纪要助手：把用户提供的会议原文内容整理成结构化会议纪要。请严格按以下分节输出，每节用【】标题并分条列出：【要点】会议核心结论与关键信息；【行动项】需要执行的具体事项（注明负责人与时间）；【待办】尚未明确或需后续跟进的事项。只输出纪要正文，不要任何解释或前缀。";
 
 /// OpenAI 兼容接口配置（serde camelCase，与前端契约对齐；字段缺省用 [Default]）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,7 +106,7 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 读取配置；文件不存在 / 解析失败 → 默认配置（驱动线程容错：缺配置时
-/// 请求会失败并走「重试 3 次 → 回退原文」的既定路径，不 panic）。
+/// 驱动降级为 MockLlmPort（见 pipeline::current_llm），不 panic）。
 pub(crate) fn read_config(app: &AppHandle) -> LlmConfig {
     let Ok(path) = config_path(app) else {
         return LlmConfig::default();
@@ -151,8 +167,9 @@ const MAX_ATTEMPTS: u32 = 4;
 const BACKOFF_MS: [u64; 3] = [500, 1000, 2000];
 
 /// ADR-0003「单次输入 ≤500 字」：超长原文按标点切分只送首个完整窗口。
-/// 滚动窗口 ≤2000 token 的约束由本常量 + 每条 final 片段天然较短共同满足
-/// （估算 ~1 token/汉字，500 字 ≈ 500-700 token，留足滚动上文余量）。
+/// 滚动窗口 ≤2000 token 的约束由本常量 + 纪要分批（engine `minutes::BATCH_MAX_CHARS`
+/// = 500 字 + 100 字滚动上文）共同满足（估算 ~1 token/汉字，500 字 ≈ 500-700
+/// token，留足滚动上文余量）。
 const MAX_INPUT_CHARS: usize = 500;
 
 impl OpenAiLlmClient {
@@ -185,19 +202,22 @@ impl OpenAiLlmClient {
         chars[..cut].iter().collect()
     }
 
-    /// 单次流式请求：POST chat/completions，逐行解析 SSE，回调增量。
-    fn stream_once(
+    /// 单次 chat/completions 请求：构造 system 人设 + user 内容，按是否有
+    /// 回调决定 `stream`，按 Content-Type 分流 SSE 逐行流式解析 / 非流式
+    /// 整段解析兜底。
+    fn chat_once(
         &self,
-        raw: &str,
-        on_delta: &mut dyn FnMut(&str),
+        system: &str,
+        user: &str,
+        on_delta: Option<&mut dyn FnMut(&str)>,
     ) -> Result<String, LlmError> {
         let body = serde_json::json!({
             "model": self.config.model,
             "messages": [
-                { "role": "system", "content": self.config.effective_persona() },
-                { "role": "user", "content": raw },
+                { "role": "system", "content": system },
+                { "role": "user", "content": user },
             ],
-            "stream": true,
+            "stream": on_delta.is_some(),
         });
 
         let resp = self
@@ -247,13 +267,40 @@ impl OpenAiLlmClient {
                 .and_then(|v| v.as_str())
             {
                 accumulated.push_str(content);
-                on_delta(&accumulated);
+                if let Some(cb) = on_delta.as_deref_mut() {
+                    cb(&accumulated);
+                }
             }
         }
         if accumulated.is_empty() {
             return Err(LlmError::Stream("SSE 流结束但未收到任何内容".to_string()));
         }
         Ok(accumulated)
+    }
+
+    /// 带退避重试地执行一次 chat 请求：`attempt` 每调用一次完成一次请求，
+    /// 失败按等比退避（500ms/1s/2s）重试，最多 [MAX_ATTEMPTS] 次尝试
+    /// （1 次初始 + 3 次重试）后放弃。
+    fn run_with_retries(
+        &self,
+        mut attempt: impl FnMut(&Self) -> Result<String, LlmError>,
+    ) -> Result<String, LlmError> {
+        let mut last_err: Option<LlmError> = None;
+        for attempt_no in 0..MAX_ATTEMPTS {
+            if attempt_no > 0 {
+                let backoff = BACKOFF_MS[(attempt_no - 1) as usize];
+                println!("[llm] 第 {attempt_no} 次重试（{backoff}ms 后，共 {MAX_ATTEMPTS} 次尝试）");
+                std::thread::sleep(Duration::from_millis(backoff));
+            }
+            match attempt(self) {
+                Ok(text) => return Ok(text),
+                Err(e) => {
+                    println!("[llm] 第 {} 次请求失败: {e}", attempt_no + 1);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| LlmError::Stream("未知错误".to_string())))
     }
 
     /// 非 SSE 响应兜底：整段 JSON 取 `choices[0].message.content`（或 delta.content）。
@@ -273,7 +320,8 @@ impl OpenAiLlmClient {
 }
 
 /// 实现 [engine::LlmPort]：驱动侧经 trait 对象调用（`Box<dyn LlmPort>`），
-/// engine 测试缝可覆盖流式路径；失败返回错误信息由驱动走 `fail_pending`。
+/// engine 测试缝可覆盖流式路径；失败返回错误信息由驱动走 `fail_pending`
+/// （整理）或回退原文/拼接兜底（纪要）。
 impl engine::LlmPort for OpenAiLlmClient {
     fn cleanup(&self, text: &str) -> String {
         // 同步兜底：不做真实请求（网络调用只在流式路径发生）；
@@ -286,30 +334,35 @@ impl engine::LlmPort for OpenAiLlmClient {
         raw: &str,
         on_partial: &mut dyn FnMut(&str),
     ) -> Result<String, String> {
-        // ADR-0003 输入窗口：超 500 字只送首个完整窗口。
+        // ADR-0003 输入窗口：超 500 字只送首个完整窗口（按句末标点切分/硬截断）。
         let window = Self::clip_input_window(raw);
-        let mut last_err: Option<LlmError> = None;
-        for attempt in 0..MAX_ATTEMPTS {
-            if attempt > 0 {
-                let backoff = BACKOFF_MS[(attempt - 1) as usize];
-                println!("[llm] 重试 {attempt}/{}（{backoff}ms 后）", MAX_ATTEMPTS - 1);
-                std::thread::sleep(Duration::from_millis(backoff));
-            }
-            match self.stream_once(&window, on_partial) {
-                Ok(text) => return Ok(text),
-                Err(e) => {
-                    println!("[llm] 第 {} 次请求失败: {e}", attempt + 1);
-                    last_err = Some(e);
-                }
-            }
-        }
-        Err(last_err
-            .unwrap_or_else(|| LlmError::Stream("未知错误".to_string()))
-            .to_string())
+        let mut cb = on_partial;
+        self.run_with_retries(move |client| {
+            client.chat_once(client.config.effective_persona(), &window, Some(&mut cb))
+        })
+        .map_err(|e| e.to_string())
     }
 
     fn summarize(&self, _chunks: &[String]) -> String {
-        // T10 起接入真实纪要（本文件在 T9 分支暂无调用方）。
+        // 同步兜底：纪要只在流式路径（summarize_streaming）发生真实请求。
         String::new()
+    }
+
+    fn summarize_streaming(
+        &self,
+        chunks: &[String],
+        on_partial: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        // 各批文本拼接（带批次标记）：【第 1 段】…\n【第 2 段】…
+        let mut user = String::new();
+        for (i, chunk) in chunks.iter().enumerate() {
+            if i > 0 {
+                user.push('\n');
+            }
+            user.push_str(&format!("【第 {} 段】\n{}", i + 1, chunk));
+        }
+        let mut cb = on_partial;
+        self.run_with_retries(move |client| client.chat_once(MINUTES_PERSONA, &user, Some(&mut cb)))
+            .map_err(|e| e.to_string())
     }
 }

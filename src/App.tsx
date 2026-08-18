@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import DualTrackView, { useEngineEvents } from "./components/DualTrackView";
 import LlmConfigPanel from "./components/LlmConfigPanel";
 import AsrLiveRow from "./components/AsrLiveRow";
-import { ENGINE_EVENT, STATUS_EVENT, type StatusPayload } from "./engineEvents";
+import MinutesPanel from "./components/MinutesPanel";
+import { ENGINE_EVENT, STATUS_EVENT, type EngineEvent, type StatusPayload } from "./engineEvents";
 import { subscribe } from "./tauriEvent";
 import {
   DisplayContext,
@@ -179,6 +180,9 @@ function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }
 // App
 // ---------------------------------------------------------------------------
 
+/** 会话状态机（T10）：识别中 / 停止中 / 生成纪要中 / 纪要就绪。 */
+type SessionStatus = "recognizing" | "stopping" | "generating" | "ready";
+
 export default function App() {
   const display = useDisplaySettingsState();
 
@@ -186,6 +190,9 @@ export default function App() {
   const [engineLive, setEngineLive] = useState(false);
   const [asrMode, setAsrMode] = useState<StatusPayload["mode"] | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // T10 会话状态与纪要：由 engine://event 驱动；按钮点击即时切换本地态。
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>("recognizing");
+  const [minutes, setMinutes] = useState<string | null>(null);
 
   // T1 调试心跳：bridge://ping → 回执，确认 Rust→前端事件桥闭环。
   useEffect(() => {
@@ -198,9 +205,22 @@ export default function App() {
     });
   }, []);
 
-  // engine 事件流存活探测：收到任意 engine://event 即认为管线已通。
+  // T9/T10 主事件源：存活探测 + 会话状态机——sessionStarted 清空纪要并回到
+  // 识别中；sessionStopped 进入「生成纪要中」；minutesReady 展示纪要。
   useEffect(() => {
-    return subscribe(ENGINE_EVENT, () => setEngineLive(true));
+    return subscribe(ENGINE_EVENT, (payload) => {
+      const evt = payload as EngineEvent;
+      setEngineLive(true);
+      if (evt.type === "sessionStarted") {
+        setSessionStatus("recognizing");
+        setMinutes(null);
+      } else if (evt.type === "sessionStopped") {
+        setSessionStatus("generating");
+      } else if (evt.type === "minutesReady") {
+        setMinutes(evt.minutes);
+        setSessionStatus("ready");
+      }
+    });
   }, []);
 
   // 壳层运行状态：ASR 模式（真实本地 ASR / 合成转写演示）。
@@ -242,6 +262,38 @@ export default function App() {
   // T9 主事件源：整理管线驱动（真实/合成转写 → 真实 LLM → 双轨事件流）。
   const events = useEngineEvents();
 
+  // T10 会话作用域事件：只保留最近一次 sessionStarted 之后的事件。重新开始
+  // 会话时 engine 重建管线（片段 id 从 0 复用），据此切掉上一会话的旧事件，
+  // 避免新旧片段混排。
+  const sessionEvents = useMemo(() => {
+    let idx = events.length;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === "sessionStarted") {
+        idx = i;
+        break;
+      }
+    }
+    return events.slice(idx);
+  }, [events]);
+
+  // 按钮点击：即时切换本地状态，Rust 驱动线程随后经事件流确认。
+  const stopSession = () => {
+    setSessionStatus("stopping");
+    invoke("stop_session").catch((e) => console.error("[session] stop_session failed:", e));
+  };
+
+  const startSession = () => {
+    setSessionStatus("recognizing");
+    invoke("start_session").catch((e) => console.error("[session] start_session failed:", e));
+  };
+
+  const sessionBadge = {
+    recognizing: { cls: "badge-on", text: "识别中" },
+    stopping: { cls: "badge-off", text: "正在停止…" },
+    generating: { cls: "badge-off", text: "正在生成纪要…" },
+    ready: { cls: "badge-on", text: "纪要已生成" },
+  }[sessionStatus];
+
   return (
     <DisplayContext.Provider value={display}>
       <div className="app">
@@ -268,8 +320,29 @@ export default function App() {
                 ? "演示模式（合成转写）"
                 : "ASR 初始化中…"}
           </span>
+          <span className={`badge ${sessionBadge.cls}`}>{sessionBadge.text}</span>
 
           <div className="app-header-right">
+            {/* T10 会话控制：停止并生成纪要 / 开始识别 */}
+            <div className="session-controls">
+              <button
+                type="button"
+                className="session-btn is-start"
+                onClick={startSession}
+                disabled={sessionStatus !== "ready"}
+              >
+                ▶ 开始识别
+              </button>
+              <button
+                type="button"
+                className="session-btn is-stop"
+                onClick={stopSession}
+                disabled={sessionStatus !== "recognizing"}
+              >
+                ⏹ 停止并生成纪要
+              </button>
+            </div>
+
             {/* 置顶大字一键开关 */}
             <button
               className={`settings-option ${display.settings.focusMode ? "active" : ""}`}
@@ -292,12 +365,16 @@ export default function App() {
 
         <main className="app-main">
           <LlmConfigPanel />
-          <DualTrackView events={events} />
+          <DualTrackView events={sessionEvents} />
           <AsrLiveRow />
+          <MinutesPanel
+            minutes={minutes}
+            generating={sessionStatus === "stopping" || sessionStatus === "generating"}
+          />
         </main>
 
         <footer className="app-footer">
-          听障实时字幕展示系统 · Tauri 2 + React + engine（T4 真实本地 ASR → T9 LLM 流式整理 → 双轨展示）
+          听障实时字幕展示系统 · Tauri 2 + React + engine（T4 真实本地 ASR → T9 LLM 流式整理 → T10 会话控制/会议纪要）
         </footer>
 
         {/* 置顶大字模式浮动退出按钮：头部隐藏后仍可一键退出（也可按 Esc） */}

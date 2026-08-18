@@ -11,6 +11,9 @@
 //! 真实 ASR（sherpa-onnx + 麦克风，失败回退合成转写）→ 整理管线 →
 //! 真实 OpenAI 兼容 LLM（SSE 流式）→ 双轨事件流；另注册 LLM 配置命令
 //! （[crate::llm::load_llm_config] / [crate::llm::save_llm_config]）。
+//! T10 注册会话控制命令（[crate::pipeline::stop_session] /
+//! [crate::pipeline::start_session]）：停止后分批汇总生成结构化会议纪要
+//! （要点/行动项/待办），经 `MinutesReady` 事件交给前端展示。
 
 pub mod audio;
 mod asr;
@@ -27,6 +30,8 @@ fn ping_ack(payload: String) {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // T10 会话控制：命令（stop/start）与驱动线程共享的原子标志。
+            app.manage(pipeline::SessionControl::new());
             bridge::spawn_ping_emitter(app.handle());
             // 主事件源（T4 + T9 整合）：真实 ASR（sherpa-onnx + 麦克风）优先，
             // 失败回退合成转写演示模式；final 转写 → 整理管线 → 真实 LLM（SSE）
@@ -37,7 +42,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping_ack,
             llm::load_llm_config,
-            llm::save_llm_config
+            llm::save_llm_config,
+            pipeline::stop_session,
+            pipeline::start_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
