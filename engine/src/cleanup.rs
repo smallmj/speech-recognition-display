@@ -334,7 +334,14 @@ impl CleanupPipeline {
 
     /// 应用一次外部 LLM 整理结果（异步场景经此回填）。editId 校验由
     /// [`SegmentStore::apply_cleanup`] 执行：只接受严格更大的，否则丢弃。
+    ///
+    /// 与 [Self::fail_pending] 对称：无论结果是否生效，都结束本次在途请求
+    /// （清 `pending` 与单在途标志）——否则异步成功路径会残留在途状态，
+    /// 驱动线程将无限重复处理同一条 pending（T9 遗留缺口，见测试
+    /// `async_apply_cleanup_result_releases_in_flight_and_pending`）。
     pub fn apply_cleanup_result(&mut self, segment_id: u64, cleaned: String, edit_id: u64) -> Vec<EngineEvent> {
+        self.pending.take();
+        self.scheduler.set_in_flight(false);
         if self.store.apply_cleanup(segment_id, cleaned.clone(), edit_id) {
             vec![EngineEvent::SegmentCleaned { segment_id, cleaned, edit_id }]
         } else {
@@ -562,6 +569,31 @@ mod tests {
     }
 
     // ---- 验收：editId 校验 / 乱序 ----
+
+    /// T9 遗留缺口回归：异步成功路径（`apply_cleanup_result`）必须结束本次
+    /// 在途请求（清 pending + 解锁单在途），否则驱动线程无限重复处理同一
+    /// pending（T10 停止排空循环同样依赖此行为）。
+    #[test]
+    fn async_apply_cleanup_result_releases_in_flight_and_pending() {
+        let mut p = mock_pipeline();
+        p.append(secs(0), 1, "异步整理".to_string());
+        assert!(p.tick(secs(3)));
+        assert!(p.has_pending());
+        let (pid, eid) = (p.pending().unwrap().segment_id, p.pending().unwrap().edit_id);
+
+        // 异步成功路径：应用结果 → 产出 SegmentCleaned，且必须清 pending 并解锁单在途
+        let events = p.apply_cleanup_result(pid, "整理完成".into(), eid);
+        assert!(events.iter().any(|e| matches!(e, EngineEvent::SegmentCleaned { segment_id, .. } if *segment_id == pid)));
+        assert!(!p.has_pending(), "成功路径必须清 pending");
+        assert!(!p.scheduler().is_in_flight(), "成功路径必须解锁单在途");
+        assert_eq!(p.store().get(pid).unwrap().status, SegmentStatus::Cleaned);
+
+        // 解锁后可继续派发下一条
+        p.append(secs(3), 1, "第二条".to_string());
+        assert!(p.tick(secs(20)));
+        assert!(p.has_pending());
+        assert_eq!(p.pending().unwrap().segment_id, 1);
+    }
 
     #[test]
     fn edit_id_rejects_stale_results() {
