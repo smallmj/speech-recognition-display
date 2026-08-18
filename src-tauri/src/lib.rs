@@ -9,7 +9,7 @@
 //! 以此验证链路。T2 起用 engine 事件流（`engine://event`）作为主事件流，
 //! ping 保留为调试心跳。
 
-mod audio;
+pub mod audio;
 mod asr;
 mod bridge;
 mod pipeline;

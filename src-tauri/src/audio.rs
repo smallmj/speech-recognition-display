@@ -37,6 +37,12 @@ pub fn start_mic_capture(tx: mpsc::Sender<Vec<f32>>) -> Result<(MicCapture, u32)
         other => Err(format!("不支持的采样格式: {other:?}")),
     }?;
 
+    // cpal 流创建后处于暂停态，必须显式 play() 才开始回调。
+    // （此前缺失导致回调零触发 → sidecar 收到静音 → 无识别文字。）
+    stream
+        .play()
+        .map_err(|e| format!("启动麦克风流失败: {e}"))?;
+
     Ok((MicCapture { stream: Some(stream) }, src_rate))
 }
 
@@ -106,6 +112,9 @@ struct Resampler {
     buf: Vec<f32>,
     /// 下次输出采样在 `buf` 中的浮点位置。
     pos: f64,
+    /// 未满 100ms 的输出缓冲 —— **跨调用累积**（真实回调是小缓冲连续推入，
+    /// 若为局部变量每次重建就永远凑不满一个块）。
+    pending: Vec<f32>,
 }
 
 impl Resampler {
@@ -116,6 +125,7 @@ impl Resampler {
             channels,
             buf: Vec::with_capacity(src_rate as usize),
             pos: 0.0,
+            pending: Vec::with_capacity(CHUNK_SAMPLES),
         }
     }
 
@@ -137,7 +147,6 @@ impl Resampler {
 
         let mut out = Vec::new();
         let step = self.src_rate as f64 / self.dst_rate as f64; // 每个输出采样消耗的输入采样数
-        let mut chunk = Vec::with_capacity(CHUNK_SAMPLES);
 
         while (self.pos + step) <= self.buf.len() as f64 {
             let i0 = self.pos.floor() as usize;
@@ -148,11 +157,13 @@ impl Resampler {
             } else {
                 s0
             };
-            chunk.push((s0 * (1.0 - frac) + s1 * frac) as f32);
+            self.pending.push((s0 * (1.0 - frac) + s1 * frac) as f32);
             self.pos += step;
 
-            if chunk.len() == CHUNK_SAMPLES {
-                out.push(std::mem::take(&mut chunk));
+            // 用 >= 而非 ==：单次推入可能跨过 1600 的整数倍，余量留给下一个块
+            if self.pending.len() >= CHUNK_SAMPLES {
+                let rest = self.pending.split_off(CHUNK_SAMPLES);
+                out.push(std::mem::replace(&mut self.pending, rest));
             }
         }
 
@@ -206,5 +217,21 @@ mod tests {
         let out = r.push(&input);
         assert_eq!(out.len(), 1);
         assert!(out[0].iter().all(|s| (*s - 0.5).abs() < 1e-6), "立体声下混为 0.5");
+    }
+
+    /// 回归：真实回调是**小缓冲连续推入**（512 帧 @48kHz ≈ 170 输出/次），
+    /// 100ms 块必须**跨调用累积**。此前的 bug 是 chunk 为 push 局部变量，
+    /// 每次调用重建，永远凑不满 1600 而零输出（静音 → 无识别文字）。
+    #[test]
+    fn resampler_accumulates_across_small_pushes() {
+        let mut r = Resampler::new(48_000, 16_000, 1);
+        let mut out: Vec<Vec<f32>> = Vec::new();
+        // 模拟 12 次真实回调（每次 512 帧），累积应超过 1600 输出
+        for _ in 0..12 {
+            let input = vec![0.5f32; 512];
+            out.extend(r.push(&input));
+        }
+        let total: usize = out.iter().map(|c| c.len()).sum();
+        assert!(total >= CHUNK_SAMPLES, "跨回调累积应产出完整块，got {total}");
     }
 }
