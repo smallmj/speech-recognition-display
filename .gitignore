@@ -5,5 +5,10 @@ node_modules/
 dist/
 target/
 
+# Tauri 构建产物（gen 内的 schema 由 tauri-build 生成，按需提交）
+src-tauri/gen/
+src-tauri/target/
+*.log
+
 # 系统文件
 .DS_Store

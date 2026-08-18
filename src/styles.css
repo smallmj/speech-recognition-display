@@ -1,0 +1,100 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #f4f5f7;
+  color: #1c1e21;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #16181d;
+    color: #e8eaed;
+  }
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.badge {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.badge-on {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.badge-off {
+  background: rgba(250, 204, 21, 0.12);
+  color: #ca8a04;
+  border-color: rgba(250, 204, 21, 0.4);
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 24px;
+  gap: 12px;
+}
+
+.placeholder-title {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.placeholder-sub {
+  margin: 0;
+  opacity: 0.75;
+  max-width: 480px;
+  line-height: 1.6;
+}
+
+.placeholder-meta {
+  font-size: 13px;
+  opacity: 0.6;
+  margin: 0;
+}
+
+.app-footer {
+  padding: 10px 24px;
+  font-size: 12px;
+  opacity: 0.5;
+  border-top: 1px solid rgba(127, 127, 127, 0.2);
+  text-align: center;
+}

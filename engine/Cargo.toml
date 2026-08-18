@@ -1,0 +1,12 @@
+[package]
+name = "engine"
+description = "听障实时字幕展示系统核心库：片段管理 / 说话人检测 / 整理管线 / 纪要编排，无 Tauri 依赖"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

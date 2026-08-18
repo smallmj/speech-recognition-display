@@ -1,0 +1,3 @@
+# pnpm 11+ 设置（settings 已迁移到 pnpm-workspace.yaml）
+allowBuilds:
+  esbuild: true
