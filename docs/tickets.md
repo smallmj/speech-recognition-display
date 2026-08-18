@@ -7,7 +7,7 @@
 |----|-------|------|-----------|------|
 | T1 | [#2](https://github.com/smallmj/speech-recognition-display/issues/2) | 工程脚手架 | 无 | ✅ 已完成 (98aef4a) |
 | T2 | [#3](https://github.com/smallmj/speech-recognition-display/issues/3) | 冒烟管线：合成转写 → 气泡流 | T1 | ✅ 已完成 (835ec12) |
-| T3 | [#4](https://github.com/smallmj/speech-recognition-display/issues/4) | 显示定制：主题 + 置顶大字模式 + 文字样式 | T2 | ready-for-agent |
+| T3 | [#4](https://github.com/smallmj/speech-recognition-display/issues/4) | 显示定制：主题 + 置顶大字模式 + 文字样式 | T2 | ✅ 已完成 (916ca17) |
 | T4 | [#5](https://github.com/smallmj/speech-recognition-display/issues/5) | 真实麦克风 + 本地流式 ASR（sherpa-onnx） | T2 | ✅ 已完成 (6a51aef) |
 | T5 | [#6](https://github.com/smallmj/speech-recognition-display/issues/6) | 说话人切换检测（SCD） | T4 | ready-for-agent |
 | T6 | [#7](https://github.com/smallmj/speech-recognition-display/issues/7) | 手动命名与头像管理 | T5 | ready-for-agent |
@@ -22,10 +22,10 @@
 ## Frontier（可立即开始）
 
 - **T5（说话人切换检测 SCD）**—— 解锁！T4 完成。核心难点票
-- **T3（显示定制）**—— 解锁！T2 完成
 - **T9（真实 LLM 接入）**—— 解锁！T8 完成
 - **T13（托盘 + 热键）**—— 解锁！T2 完成
 - **T7（云端 ASR）**—— 解锁！T4 完成（增强项，可后置）
+- **T3 ✅ 已完成**（916ca17）
 
 ## 依赖图（简）
 
