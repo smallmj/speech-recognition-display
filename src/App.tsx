@@ -220,6 +220,21 @@ export default function App() {
       .catch((e) => console.warn("[display] setAlwaysOnTop 失败:", e));
   }, [focusMode]);
 
+  // 全局 ESC：设置面板打开时先关面板；否则若在置顶大字模式则退出大字模式。
+  // （置顶大字模式下头部被隐藏，ESC 是必须的退出途径之一。）
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (settingsOpen) {
+        setSettingsOpen(false);
+      } else if (focusMode) {
+        display.setFocusMode(false);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [settingsOpen, focusMode, display]);
+
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
   return (
@@ -277,6 +292,18 @@ export default function App() {
         <footer className="app-footer">
           听障实时字幕展示系统 · Tauri 2 + React + engine（T4 真实本地 ASR）
         </footer>
+
+        {/* 置顶大字模式浮动退出按钮：头部隐藏后仍可一键退出（也可按 Esc） */}
+        {focusMode && (
+          <button
+            type="button"
+            className="focus-exit"
+            onClick={() => display.setFocusMode(false)}
+            title="退出置顶大字模式（Esc）"
+          >
+            ✕ 退出大字
+          </button>
+        )}
 
         <SettingsPanel open={settingsOpen} onClose={closeSettings} />
       </div>

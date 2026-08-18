@@ -506,6 +506,38 @@ body {
   padding: 14px 32px;
 }
 
+/* 置顶大字模式的浮动退出按钮：头部隐藏后的唯一可见控件（也可按 Esc）。
+   低存在感（半透明），悬停时显现，不遮挡阅读。 */
+.focus-exit {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 100;
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: rgba(30, 32, 38, 0.35);
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  opacity: 0.35;
+  transition: opacity 0.2s ease, background 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.focus-exit:hover,
+.focus-exit:focus-visible {
+  opacity: 1;
+  background: rgba(30, 32, 38, 0.85);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] .focus-exit {
+    background: rgba(240, 242, 245, 0.6);
+    color: rgba(30, 32, 38, 0.8);
+  }
+}
+
 /* ===================================================================
  * 设置面板
  * =================================================================== */
