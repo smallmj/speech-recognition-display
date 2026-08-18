@@ -1,3 +1,167 @@
+/* ===================================================================
+ * 显示定制 CSS 变量体系（T3）
+ *
+ * 变量定义在 :root[data-theme] 上，由 src/displaySettings.ts 即时写入。
+ * - data-theme="auto"  → 跟随系统（默认浅色，@media 深色覆盖）
+ * - data-theme="light" → 固定浅色
+ * - data-theme="dark"  → 固定深色
+ * - data-focus-mode="true" → 置顶大字模式：放大字体、隐藏非核心 UI
+ * =================================================================== */
+
+/* ---- 浅色（默认 / auto 基准 / 手动 light） ---- */
+:root[data-theme="auto"],
+:root[data-theme="light"] {
+  --app-bg: #f4f5f7;
+  --app-fg: #1c1e21;
+  --header-border: rgba(127, 127, 127, 0.25);
+  --footer-border: rgba(127, 127, 127, 0.2);
+  --footer-opacity: 0.5;
+
+  --bubble-bg: #ffffff;
+  --bubble-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --bubble-empty-opacity: 0.6;
+  --bubble-meta-time-opacity: 0.5;
+
+  --back-to-latest-bg: rgba(255, 255, 255, 0.92);
+  --back-to-latest-fg: #1c1e21;
+  --back-to-latest-border: rgba(127, 127, 127, 0.35);
+  --back-to-latest-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+  --bubble-status-opacity: 0.55;
+  --bubble-status-border: rgba(127, 127, 127, 0.18);
+
+  --asr-live-bg: rgba(79, 140, 255, 0.06);
+  --asr-live-border: rgba(127, 127, 127, 0.18);
+
+  --badge-on-bg: rgba(34, 197, 94, 0.15);
+  --badge-on-fg: #16a34a;
+  --badge-on-border: rgba(34, 197, 94, 0.4);
+  --badge-off-bg: rgba(250, 204, 21, 0.12);
+  --badge-off-fg: #ca8a04;
+  --badge-off-border: rgba(250, 204, 21, 0.4);
+  --badge-wait-bg: rgba(127, 127, 127, 0.1);
+  --badge-wait-fg: #6b7280;
+  --badge-wait-border: rgba(127, 127, 127, 0.3);
+
+  --bubble-avatar-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+
+  --settings-panel-bg: #ffffff;
+  --settings-panel-fg: #1c1e21;
+  --settings-panel-border: rgba(127, 127, 127, 0.2);
+  --settings-panel-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  --settings-btn-hover: rgba(0, 0, 0, 0.06);
+  --settings-option-hover: rgba(0, 0, 0, 0.04);
+  --settings-option-active-bg: rgba(79, 140, 255, 0.12);
+  --settings-option-active-fg: #4f8cff;
+  --settings-divider: rgba(127, 127, 127, 0.15);
+  --settings-hint: #8e8e93;
+  --settings-section-title: #6b7280;
+}
+
+/* ---- 深色（手动 dark） ---- */
+:root[data-theme="dark"] {
+  --app-bg: #16181d;
+  --app-fg: #e8eaed;
+  --header-border: rgba(127, 127, 127, 0.3);
+  --footer-border: rgba(127, 127, 127, 0.25);
+  --footer-opacity: 0.45;
+
+  --bubble-bg: #1e2027;
+  --bubble-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --bubble-empty-opacity: 0.5;
+  --bubble-meta-time-opacity: 0.45;
+
+  --back-to-latest-bg: rgba(38, 40, 46, 0.94);
+  --back-to-latest-fg: #e8eaed;
+  --back-to-latest-border: rgba(127, 127, 127, 0.4);
+  --back-to-latest-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+
+  --bubble-status-opacity: 0.45;
+  --bubble-status-border: rgba(127, 127, 127, 0.25);
+
+  --asr-live-bg: rgba(79, 140, 255, 0.08);
+  --asr-live-border: rgba(127, 127, 127, 0.25);
+
+  --badge-on-bg: rgba(34, 197, 94, 0.18);
+  --badge-on-fg: #4ade80;
+  --badge-on-border: rgba(34, 197, 94, 0.35);
+  --badge-off-bg: rgba(250, 204, 21, 0.15);
+  --badge-off-fg: #facc15;
+  --badge-off-border: rgba(250, 204, 21, 0.35);
+  --badge-wait-bg: rgba(127, 127, 127, 0.12);
+  --badge-wait-fg: #9ca3af;
+  --badge-wait-border: rgba(127, 127, 127, 0.25);
+
+  --bubble-avatar-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+
+  --settings-panel-bg: #1e2027;
+  --settings-panel-fg: #e8eaed;
+  --settings-panel-border: rgba(127, 127, 127, 0.25);
+  --settings-panel-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --settings-btn-hover: rgba(255, 255, 255, 0.08);
+  --settings-option-hover: rgba(255, 255, 255, 0.05);
+  --settings-option-active-bg: rgba(79, 140, 255, 0.2);
+  --settings-option-active-fg: #6ba3ff;
+  --settings-divider: rgba(127, 127, 127, 0.2);
+  --settings-hint: #8e8e93;
+  --settings-section-title: #9ca3af;
+}
+
+/* ---- auto 模式：跟随系统深色 ---- */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    --app-bg: #16181d;
+    --app-fg: #e8eaed;
+    --header-border: rgba(127, 127, 127, 0.3);
+    --footer-border: rgba(127, 127, 127, 0.25);
+    --footer-opacity: 0.45;
+
+    --bubble-bg: #1e2027;
+    --bubble-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --bubble-empty-opacity: 0.5;
+    --bubble-meta-time-opacity: 0.45;
+
+    --back-to-latest-bg: rgba(38, 40, 46, 0.94);
+    --back-to-latest-fg: #e8eaed;
+    --back-to-latest-border: rgba(127, 127, 127, 0.4);
+    --back-to-latest-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+
+    --bubble-status-opacity: 0.45;
+    --bubble-status-border: rgba(127, 127, 127, 0.25);
+
+    --asr-live-bg: rgba(79, 140, 255, 0.08);
+    --asr-live-border: rgba(127, 127, 127, 0.25);
+
+    --badge-on-bg: rgba(34, 197, 94, 0.18);
+    --badge-on-fg: #4ade80;
+    --badge-on-border: rgba(34, 197, 94, 0.35);
+    --badge-off-bg: rgba(250, 204, 21, 0.15);
+    --badge-off-fg: #facc15;
+    --badge-off-border: rgba(250, 204, 21, 0.35);
+    --badge-wait-bg: rgba(127, 127, 127, 0.12);
+    --badge-wait-fg: #9ca3af;
+    --badge-wait-border: rgba(127, 127, 127, 0.25);
+
+    --bubble-avatar-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+
+    --settings-panel-bg: #1e2027;
+    --settings-panel-fg: #e8eaed;
+    --settings-panel-border: rgba(127, 127, 127, 0.25);
+    --settings-panel-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    --settings-btn-hover: rgba(255, 255, 255, 0.08);
+    --settings-option-hover: rgba(255, 255, 255, 0.05);
+    --settings-option-active-bg: rgba(79, 140, 255, 0.2);
+    --settings-option-active-fg: #6ba3ff;
+    --settings-divider: rgba(127, 127, 127, 0.2);
+    --settings-hint: #8e8e93;
+    --settings-section-title: #9ca3af;
+  }
+}
+
+/* ===================================================================
+ * 基础重置
+ * =================================================================== */
+
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -11,16 +175,13 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f4f5f7;
-  color: #1c1e21;
+  background: var(--app-bg);
+  color: var(--app-fg);
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
-    background: #16181d;
-    color: #e8eaed;
-  }
-}
+/* ===================================================================
+ * 布局
+ * =================================================================== */
 
 .app {
   min-height: 100vh;
@@ -28,14 +189,78 @@ body {
   flex-direction: column;
 }
 
-/* ---- 主区域：气泡流撑满剩余高度，内部滚动 ---- */
-
 .app-main {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
+
+/* ---- 头部 ---- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--header-border);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.app-header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- 页脚 ---- */
+
+.app-footer {
+  padding: 10px 24px;
+  font-size: 12px;
+  opacity: var(--footer-opacity);
+  border-top: 1px solid var(--footer-border);
+  text-align: center;
+}
+
+/* ===================================================================
+ * 状态徽章
+ * =================================================================== */
+
+.badge {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.badge-on {
+  background: var(--badge-on-bg);
+  color: var(--badge-on-fg);
+  border-color: var(--badge-on-border);
+}
+
+.badge-off {
+  background: var(--badge-off-bg);
+  color: var(--badge-off-fg);
+  border-color: var(--badge-off-border);
+}
+
+.badge-wait {
+  background: var(--badge-wait-bg);
+  color: var(--badge-wait-fg);
+  border-color: var(--badge-wait-border);
+}
+
+/* ===================================================================
+ * 气泡流
+ * =================================================================== */
 
 .bubble-flow-wrap {
   flex: 1;
@@ -58,7 +283,7 @@ body {
 .bubble-empty {
   margin: auto;
   text-align: center;
-  opacity: 0.6;
+  opacity: var(--bubble-empty-opacity);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -75,7 +300,7 @@ body {
   margin: 0;
 }
 
-/* ---- 单条气泡行：头像 + 内容列 ---- */
+/* ---- 单条气泡行 ---- */
 
 .bubble-row {
   display: flex;
@@ -104,7 +329,7 @@ body {
   align-items: center;
   justify-content: center;
   font-size: 22px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--bubble-avatar-shadow);
   user-select: none;
 }
 
@@ -130,52 +355,50 @@ body {
 
 .bubble-time {
   font-size: 11px;
-  opacity: 0.5;
+  opacity: var(--bubble-meta-time-opacity);
 }
 
+/* 气泡文字 —— 字号/字体/颜色由 CSS 变量控制，displaySettings 即时生效 */
 .bubble-text {
   padding: 9px 14px;
   border-radius: 12px;
   border-left: 3px solid transparent;
-  font-size: 15px;
+  font-size: var(--bubble-font-size, 15px);
+  font-family: var(--bubble-font-family, inherit);
+  color: var(--bubble-text-color, inherit);
   line-height: 1.55;
   word-break: break-word;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--bubble-shadow);
 }
 
-/* ---- 回到最新（用户上翻后出现） ---- */
+/* ---- 回到最新 ---- */
 
 .back-to-latest {
   position: absolute;
   bottom: 44px;
   left: 50%;
   transform: translateX(-50%);
-  border: 1px solid rgba(127, 127, 127, 0.35);
-  background: rgba(255, 255, 255, 0.92);
-  color: #1c1e21;
+  border: 1px solid var(--back-to-latest-border);
+  background: var(--back-to-latest-bg);
+  color: var(--back-to-latest-fg);
   font-size: 13px;
   padding: 6px 16px;
   border-radius: 999px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+  box-shadow: var(--back-to-latest-shadow);
 }
 
-@media (prefers-color-scheme: dark) {
-  .back-to-latest {
-    background: rgba(38, 40, 46, 0.94);
-    color: #e8eaed;
-  }
-}
+/* ---- 底部状态栏 ---- */
 
 .bubble-status {
   padding: 8px 24px;
   font-size: 12px;
-  opacity: 0.55;
-  border-top: 1px solid rgba(127, 127, 127, 0.18);
+  opacity: var(--bubble-status-opacity);
+  border-top: 1px solid var(--bubble-status-border);
   text-align: center;
 }
 
-/* ---- 实时识别状态行（partial 边说边出） ---- */
+/* ---- 实时识别状态行 ---- */
 
 .asr-live {
   display: flex;
@@ -183,8 +406,8 @@ body {
   gap: 8px;
   padding: 10px 24px;
   font-size: 14px;
-  border-top: 1px solid rgba(127, 127, 127, 0.18);
-  background: rgba(79, 140, 255, 0.06);
+  border-top: 1px solid var(--asr-live-border);
+  background: var(--asr-live-bg);
 }
 
 .asr-live-dot {
@@ -217,44 +440,9 @@ body {
   opacity: 0.85;
 }
 
-.app-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 24px;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
-}
-
-.app-header h1 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.badge {
-  font-size: 12px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-}
-
-.badge-on {
-  background: rgba(34, 197, 94, 0.15);
-  color: #16a34a;
-  border-color: rgba(34, 197, 94, 0.4);
-}
-
-.badge-off {
-  background: rgba(250, 204, 21, 0.12);
-  color: #ca8a04;
-  border-color: rgba(250, 204, 21, 0.4);
-}
-
-.badge-wait {
-  background: rgba(127, 127, 127, 0.1);
-  color: #6b7280;
-  border-color: rgba(127, 127, 127, 0.3);
-}
+/* ===================================================================
+ * 占位组件（DualTrack 等）
+ * =================================================================== */
 
 .placeholder {
   flex: 1;
@@ -286,10 +474,180 @@ body {
   margin: 0;
 }
 
-.app-footer {
-  padding: 10px 24px;
+/* ===================================================================
+ * 置顶大字模式（data-focus-mode="true"）
+ * =================================================================== */
+
+:root[data-focus-mode="true"] .app-header {
+  display: none;
+}
+
+:root[data-focus-mode="true"] .app-footer {
+  display: none;
+}
+
+:root[data-focus-mode="true"] .bubble-status {
+  display: none;
+}
+
+:root[data-focus-mode="true"] .bubble-text {
+  font-size: calc(var(--bubble-font-size, 15px) * 1.8);
+  line-height: 1.7;
+  padding: 14px 20px;
+}
+
+:root[data-focus-mode="true"] .bubble-flow {
+  padding: 24px 32px 16px;
+  gap: 20px;
+}
+
+:root[data-focus-mode="true"] .asr-live {
+  font-size: 18px;
+  padding: 14px 32px;
+}
+
+/* ===================================================================
+ * 设置面板
+ * =================================================================== */
+
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  font-size: 13px;
+  border: 1px solid var(--header-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--app-fg);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.settings-btn:hover {
+  background: var(--settings-btn-hover);
+}
+
+.settings-panel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  /* 点击覆盖层关闭面板 */
+}
+
+.settings-panel {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  z-index: 1001;
+  width: 280px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  background: var(--settings-panel-bg);
+  color: var(--settings-panel-fg);
+  border: 1px solid var(--settings-panel-border);
+  border-radius: 12px;
+  box-shadow: var(--settings-panel-shadow);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13px;
+}
+
+.settings-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-panel-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--settings-section-title);
+  margin: 0;
+}
+
+.settings-panel-hint {
+  font-size: 11px;
+  color: var(--settings-hint);
+  margin: 0;
+}
+
+.settings-panel-divider {
+  border: none;
+  border-top: 1px solid var(--settings-divider);
+  margin: 0;
+}
+
+/* 选项行（theme / fontSize / fontFamily / textColor） */
+.settings-option-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.settings-option {
+  padding: 4px 10px;
   font-size: 12px;
-  opacity: 0.5;
-  border-top: 1px solid rgba(127, 127, 127, 0.2);
-  text-align: center;
+  border: 1px solid var(--settings-panel-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--settings-panel-fg);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.settings-option:hover {
+  background: var(--settings-option-hover);
+}
+
+.settings-option.active {
+  background: var(--settings-option-active-bg);
+  color: var(--settings-option-active-fg);
+  border-color: var(--settings-option-active-fg);
+}
+
+/* 置顶大字开关 */
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-toggle-label {
+  font-weight: 500;
+}
+
+.settings-toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  border: none;
+  background: rgba(127, 127, 127, 0.3);
+  cursor: pointer;
+  transition: background 0.2s;
+  padding: 0;
+}
+
+.settings-toggle.on {
+  background: #4f8cff;
+}
+
+.settings-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+}
+
+.settings-toggle.on .settings-toggle-knob {
+  transform: translateX(18px);
 }
