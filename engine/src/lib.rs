@@ -8,12 +8,16 @@
 //! 这是整个应用**唯一的测试缝**：测试中喂入合成输入（文本片段、
 //! 预计算 embedding、模拟 LLM 返回），断言输出的事件流，不触及
 //! 真实音频/网络/WebView。
+//!
+//! T2 新增 [crate::pipeline]：冒烟管线（[crate::pipeline::MockAsrPort] +
+//! [crate::pipeline::Engine]），把合成转写转化为带说话人/颜色的片段事件流。
 
+mod cleanup;
+mod pipeline;
 mod types;
 
-pub use types::{
-    AsrPort, EmbeddingPort, EngineEvent, LlmPort, Segment, SegmentStatus,
-};
+pub use pipeline::{speaker_color, Engine, MockAsrPort, SPEAKER_PALETTE};
+pub use types::{AsrPort, EmbeddingPort, EngineEvent, Gender, LlmPort, Segment, SegmentStatus, Utterance};
 
 #[cfg(test)]
 mod tests {
@@ -43,14 +47,15 @@ mod tests {
         let back: Segment = serde_json::from_str(&json).expect("deserialize segment");
         assert_eq!(seg, back);
 
-        // 事件也可序列化
+        // 事件也可序列化；契约是 type 标签 + camelCase 字段
         let evt = EngineEvent::SegmentCleaned {
             segment_id: 7,
             cleaned: "你好，我想确认一下时间。".into(),
             edit_id: 3,
         };
         let evt_json = serde_json::to_string(&evt).expect("serialize event");
-        assert!(evt_json.contains("SegmentCleaned"));
+        assert!(evt_json.contains("\"type\":\"segmentCleaned\""), "got: {evt_json}");
+        assert!(evt_json.contains("\"segmentId\""), "got: {evt_json}");
     }
 
     /// T1 骨架测试：三个端口 trait 可被 mock 实现（测试缝成立）。
@@ -60,6 +65,9 @@ mod tests {
         impl AsrPort for MockAsr {
             fn start(&mut self) {}
             fn stop(&mut self) {}
+            fn next_utterance(&mut self) -> Option<Utterance> {
+                None
+            }
         }
 
         struct MockEmbedding;
@@ -82,6 +90,7 @@ mod tests {
         let mut asr = MockAsr;
         asr.start();
         asr.stop();
+        assert!(asr.next_utterance().is_none());
 
         let emb = MockEmbedding.compute_embedding(&[1.0, 2.0, 3.0]);
         assert_eq!(emb, vec![6.0]);

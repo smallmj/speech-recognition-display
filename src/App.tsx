@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import BubbleFlow from "./components/BubbleFlow";
+import { ENGINE_EVENT } from "./engineEvents";
+import { subscribe } from "./tauriEvent";
 
-/** Rust 端 emit 的测试事件负载。 */
+/** Rust 端 emit 的 ping 事件负载（调试心跳，T1 遗留）。 */
 interface PingPayload {
   type: "ping";
   seq: number;
@@ -12,30 +14,23 @@ interface PingPayload {
 const PING_EVENT = "bridge://ping";
 
 export default function App() {
-  const [pings, setPings] = useState<number[]>([]);
   const [bridgeReady, setBridgeReady] = useState(false);
+  const [engineLive, setEngineLive] = useState(false);
 
+  // T1 调试心跳：bridge://ping → 回执，确认 Rust→前端事件桥闭环。
   useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
+    return subscribe(PING_EVENT, (payload) => {
+      const event = payload as PingPayload;
+      setBridgeReady(true);
+      invoke("ping_ack", { payload: `seq=${event.seq}` }).catch((e) =>
+        console.error("[bridge] ping_ack failed:", e),
+      );
+    });
+  }, []);
 
-    (async () => {
-      // 注册 listen：收到 Rust 端 ping 事件。
-      // 验证点：控制台 `[bridge] ping received: {...}` 即链路已通。
-      unlisten = await listen<PingPayload>(PING_EVENT, (event) => {
-        console.log("[bridge] ping received:", event.payload);
-        setBridgeReady(true);
-        setPings((prev) => [...prev, event.payload.seq]);
-
-        // 回执给 Rust 端，形成闭环（Rust 日志可见确认）。
-        invoke("ping_ack", { payload: `seq=${event.payload.seq}` }).catch((e) =>
-          console.error("[bridge] ping_ack failed:", e),
-        );
-      });
-    })();
-
-    return () => {
-      if (unlisten) unlisten();
-    };
+  // engine 事件流存活探测：收到任意 engine://event 即认为管线已通。
+  useEffect(() => {
+    return subscribe(ENGINE_EVENT, () => setEngineLive(true));
   }, []);
 
   return (
@@ -45,20 +40,16 @@ export default function App() {
         <span className={`badge ${bridgeReady ? "badge-on" : "badge-off"}`}>
           {bridgeReady ? "事件桥已接通" : "等待事件桥…"}
         </span>
+        <span className={`badge ${engineLive ? "badge-on" : "badge-off"}`}>
+          {engineLive ? "engine 管线运行中" : "等待 engine 事件…"}
+        </span>
       </header>
 
-      <main className="placeholder">
-        <p className="placeholder-title">T1 工程脚手架 · 占位界面</p>
-        <p className="placeholder-sub">
-          Web 前端骨架已加载。后续票将把 engine 事件流渲染为说话人气泡。
-        </p>
-        <p className="placeholder-meta">
-          已收到 ping 事件 <strong>{pings.length}</strong> 次
-          {pings.length > 0 && `（seq: ${pings.slice(-5).join(", ")}…）`}
-        </p>
+      <main className="app-main">
+        <BubbleFlow />
       </main>
 
-      <footer className="app-footer">听障实时字幕展示系统 · Tauri 2 + React + engine</footer>
+      <footer className="app-footer">听障实时字幕展示系统 · Tauri 2 + React + engine（T2 冒烟管线）</footer>
     </div>
   );
 }

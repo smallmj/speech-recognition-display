@@ -10,5 +10,9 @@ src-tauri/gen/
 src-tauri/target/
 *.log
 
+# ASR sidecar 运行时（Python venv 与下载的模型不进 git）
+src-tauri/.venv/
+src-tauri/asr-models/
+
 # 系统文件
 .DS_Store

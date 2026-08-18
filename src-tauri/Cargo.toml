@@ -17,3 +17,6 @@ tauri = { version = "2", features = [] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 engine = { path = "../engine" }
+# 麦克风采集（macOS 走 CoreAudio）
+cpal = { version = "0.18" }
+rubato = "0.15"

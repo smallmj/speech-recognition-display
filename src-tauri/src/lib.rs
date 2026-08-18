@@ -6,9 +6,11 @@
 //!
 //! T1 阶段：尚未接入真实外部能力，仅打通「Rust → 前端」事件桥——
 //! 周期性地 emit 一条测试事件 `bridge://ping`，前端 listen 并回执，
-//! 以此验证链路。后续票（T2 起）会在此用 engine 事件流替换测试事件。
+//! 以此验证链路。T2 起用 engine 事件流（`engine://event`）作为主事件流，
+//! ping 保留为调试心跳。
 
 mod bridge;
+mod pipeline;
 
 /// 前端收到 ping 后的回执命令，用于端到端确认事件桥闭环。
 #[tauri::command]
@@ -20,6 +22,8 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             bridge::spawn_ping_emitter(app.handle());
+            // T2 冒烟管线：engine（MockAsrPort）事件流 → 前端 `engine://event`。
+            pipeline::spawn_engine_emitter(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![ping_ack])

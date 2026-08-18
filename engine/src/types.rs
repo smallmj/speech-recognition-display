@@ -1,11 +1,17 @@
 //! engine 数据契约：事件类型、片段模型与三个可注入端口。
 //!
 //! 本模块不依赖 Tauri —— 是整个应用唯一的测试缝。
+//!
+//! 序列化契约（与规格文档数据契约对齐）：
+//! - 事件用 `type` 标签区分（如 `{"type":"segmentAppended", ...}`）
+//! - 字段一律 camelCase（`speakerId` / `isNewSpeaker` / `editId` …）
+//! - `SegmentStatus` / `Gender` 用小写字符串（`"active"` / `"male"` …）
 
 use serde::{Deserialize, Serialize};
 
 /// 片段生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SegmentStatus {
     /// 正在追加中，尚未送 LLM 整理（interim）。
     Active,
@@ -17,11 +23,21 @@ pub enum SegmentStatus {
     Failed,
 }
 
+/// 说话人性别（用于前端头像选择，engine 端根据音色特征标记）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Gender {
+    Male,
+    Female,
+    Unknown,
+}
+
 /// 一条发言的不可变原文片段。
 ///
 /// `raw` 只写一次；整理结果写入 `cleaned`，通过单调递增的 `edit_id`
 /// 让渲染层只接受更大的值，避免乱序/旧结果覆盖。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Segment {
     /// 全局单调递增 id，排序与去重键。
     pub id: u64,
@@ -40,22 +56,67 @@ pub struct Segment {
     pub retries: u32,
 }
 
+/// ASR 端产出的一条转写单元（一条完整发言）。
+///
+/// 真实实现（T4+）由 ASR/SCD 上游产出；T2 冒烟管线由 [crate::pipeline::MockAsrPort]
+/// 按预设脚本逐条给出。`speaker_id` 在冒烟阶段由脚本指定，真实阶段由 SCD 决定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Utterance {
+    /// 说话人 id（SCD 归属结果）。
+    pub speaker_id: u32,
+    /// 说话人性别（用于头像选择）。
+    pub gender: Gender,
+    /// 转写文本。
+    pub text: String,
+    /// 时间戳（毫秒）。
+    pub ts: u64,
+}
+
 /// engine 对外暴露的统一事件流。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum EngineEvent {
     SessionStarted,
     SessionStopped,
-    SegmentAppended { segment: Segment },
-    SpeakerAssigned { segment_id: u64, speaker_id: u32, is_new_speaker: bool },
-    SegmentCleaned { segment_id: u64, cleaned: String, edit_id: u64 },
-    CleanupFailed { segment_id: u64 },
-    MinutesReady { minutes: String },
+    #[serde(rename_all = "camelCase")]
+    SegmentAppended {
+        segment: Segment,
+    },
+    #[serde(rename_all = "camelCase")]
+    SpeakerAssigned {
+        segment_id: u64,
+        speaker_id: u32,
+        is_new_speaker: bool,
+        /// 该说话人分配到的颜色（hex，如 `#4f8cff`），同一说话人恒定。
+        color: String,
+        gender: Gender,
+    },
+    #[serde(rename_all = "camelCase")]
+    SegmentCleaned {
+        segment_id: u64,
+        cleaned: String,
+        edit_id: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    CleanupFailed {
+        segment_id: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    MinutesReady {
+        minutes: String,
+    },
 }
 
 /// ASR 端口：外部语音识别能力（本地 sherpa-onnx / 云端）接入点。
+///
+/// 采用"拉取"模型：宿主（engine / 驱动线程）周期调用 [AsrPort::next_utterance]
+/// 取走一条转写结果。T4 真实 ASR 可在内部缓冲回调流，对外仍实现本 trait。
 pub trait AsrPort: Send {
     fn start(&mut self);
     fn stop(&mut self);
+    /// 拉取下一条转写结果；当前无新结果时返回 `None`。
+    fn next_utterance(&mut self) -> Option<Utterance>;
 }
 
 /// Embedding 端口：说话人声纹向量计算（用于 SCD 余弦匹配）。
