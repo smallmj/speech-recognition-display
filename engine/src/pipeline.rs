@@ -145,6 +145,11 @@ impl Engine {
         true
     }
 
+    /// 发布一条旁路事件（如实时 partial 结果），与转写事件共用同一事件流。
+    pub fn publish(&self, evt: EngineEvent) {
+        let _ = self.tx.send(evt);
+    }
+
     /// 连续 [Engine::step] 直到端口暂时无输入（测试/冒烟用）。
     pub fn drain(&mut self) {
         while self.step() {}

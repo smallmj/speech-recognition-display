@@ -53,6 +53,10 @@ export default function BubbleFlow() {
   const [stuckToBottom, setStuckToBottom] = useState(true);
   const [scrolledUp, setScrolledUp] = useState(false);
   const [count, setCount] = useState(0);
+  // 实时识别中间结果（边说边出）；最后更新时间用于「识别中/聆听中」判定。
+  const [partial, setPartial] = useState<string>("");
+  const partialAtRef = useRef<number>(0);
+  const [, setPartialTick] = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const speakersRef = useRef(speakers);
@@ -61,6 +65,12 @@ export default function BubbleFlow() {
   useEffect(() => {
     speakersRef.current = speakers;
   }, [speakers]);
+
+  // 每 1s 重渲染一次，用于「识别中」状态的过期判定（2s 无 partial 即聆听中）。
+  useEffect(() => {
+    const timer = setInterval(() => setPartialTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // 注册 engine 事件流监听（模块级单例，StrictMode 安全：每个事件名只有一个 Tauri 监听）。
   useEffect(() => {
@@ -97,6 +107,9 @@ export default function BubbleFlow() {
           if (!info) {
             console.warn("[bubble] segment 先于 speakerAssigned 到达:", seg.speakerId);
           }
+        } else if (evt.type === "partialResult") {
+          setPartial(evt.text);
+          partialAtRef.current = Date.now();
         }
       });
   }, []);
@@ -175,6 +188,15 @@ export default function BubbleFlow() {
           ↓ 回到最新
         </button>
       )}
+
+      {/* 实时识别状态行：partial 边说边出；2s 无更新回到「聆听中」 */}
+      {partial && Date.now() - partialAtRef.current < 2000 ? (
+        <div className="asr-live" aria-live="polite">
+          <span className="asr-live-dot" aria-hidden />
+          <span className="asr-live-label">识别中</span>
+          <span className="asr-live-text">{partial}</span>
+        </div>
+      ) : null}
 
       <footer className="bubble-status">
         已渲染 <strong>{count}</strong> 条气泡 · {speakers.size} 位说话人

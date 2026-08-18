@@ -34,9 +34,19 @@ export type EngineEvent =
       color: string;
       gender: Gender;
     }
+  | { type: "partialResult"; text: string }
   | { type: "segmentCleaned"; segmentId: number; cleaned: string; editId: number }
   | { type: "cleanupFailed"; segmentId: number }
   | { type: "minutesReady"; minutes: string };
 
 /** Rust 端 emit 的 engine 事件流事件名（与 `src-tauri/src/pipeline.rs` 保持一致）。 */
 export const ENGINE_EVENT = "engine://event";
+
+/** 壳层运行状态事件名（ASR 模式等，与 `src-tauri/src/pipeline.rs` 保持一致）。 */
+export const STATUS_EVENT = "engine://status";
+
+/** 壳层状态负载：mode = sherpa（真实本地 ASR）| mock（合成转写演示）。 */
+export interface StatusPayload {
+  mode: "sherpa" | "mock";
+  reason?: string;
+}

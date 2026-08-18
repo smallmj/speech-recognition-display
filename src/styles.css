@@ -175,6 +175,48 @@ body {
   text-align: center;
 }
 
+/* ---- 实时识别状态行（partial 边说边出） ---- */
+
+.asr-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 24px;
+  font-size: 14px;
+  border-top: 1px solid rgba(127, 127, 127, 0.18);
+  background: rgba(79, 140, 255, 0.06);
+}
+
+.asr-live-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff3b30;
+  animation: asr-pulse 1s ease-in-out infinite;
+}
+
+@keyframes asr-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.asr-live-label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4f8cff;
+}
+
+.asr-live-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
 .app-header {
   display: flex;
   align-items: center;
@@ -206,6 +248,12 @@ body {
   background: rgba(250, 204, 21, 0.12);
   color: #ca8a04;
   border-color: rgba(250, 204, 21, 0.4);
+}
+
+.badge-wait {
+  background: rgba(127, 127, 127, 0.1);
+  color: #6b7280;
+  border-color: rgba(127, 127, 127, 0.3);
 }
 
 .placeholder {

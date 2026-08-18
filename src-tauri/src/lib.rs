@@ -9,6 +9,8 @@
 //! 以此验证链路。T2 起用 engine 事件流（`engine://event`）作为主事件流，
 //! ping 保留为调试心跳。
 
+mod audio;
+mod asr;
 mod bridge;
 mod pipeline;
 
@@ -22,7 +24,8 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             bridge::spawn_ping_emitter(app.handle());
-            // T2 冒烟管线：engine（MockAsrPort）事件流 → 前端 `engine://event`。
+            // T4 起：真实 ASR（sherpa-onnx + 麦克风）优先，失败自动回退
+            // 合成转写演示模式；事件流统一经 `engine://event` 推给前端。
             pipeline::spawn_engine_emitter(app.handle());
             Ok(())
         })

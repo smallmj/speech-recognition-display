@@ -83,6 +83,12 @@ pub enum EngineEvent {
     SegmentAppended {
         segment: Segment,
     },
+    /// 流式识别的实时中间结果（边说边出）。final 定稿后由
+    /// [EngineEvent::SegmentAppended] 携带完整片段。
+    #[serde(rename_all = "camelCase")]
+    PartialResult {
+        text: String,
+    },
     #[serde(rename_all = "camelCase")]
     SpeakerAssigned {
         segment_id: u64,

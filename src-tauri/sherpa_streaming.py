@@ -72,21 +72,31 @@ class StreamingRecognizer:
     - 端点检测（enable_endpoint_detection）触发时输出 final，并 reset 开启新句。
     """
 
+    def _find(self, prefix: str, suffixes: list[str]) -> Path:
+        """按前缀 + 后缀候选在模型目录里找文件（兼容官方 *-epoch-*-avg-* 命名）。"""
+        for suffix in suffixes:
+            for p in self.model_dir.iterdir():
+                name = p.name
+                if name.startswith(prefix) and name.endswith(suffix):
+                    return p
+        return self.model_dir / (prefix + suffixes[0])
+
     def __init__(self, model_dir: str, num_threads: int = 2, sample_rate: int = 16000):
         self.model_dir = Path(model_dir)
         self.sample_rate = sample_rate
 
         # x-asr streaming zipformer transducer（BPE）文件布局
-        encoder = self.model_dir / "encoder.int8.onnx"
-        decoder = self.model_dir / "decoder.onnx"
-        joiner = self.model_dir / "joiner.int8.onnx"
+        # 兼容两种命名：官方模型原始名（*-epoch-*-avg-*）或简化名
+        encoder = self._find("encoder", [".int8.onnx", ".onnx"])
+        decoder = self._find("decoder", [".onnx", ".int8.onnx"])
+        joiner = self._find("joiner", [".int8.onnx", ".onnx"])
         tokens = self.model_dir / "tokens.txt"
         bpe = self.model_dir / "bpe.model"
 
         if not all(p.is_file() for p in (encoder, decoder, joiner, tokens, bpe)):
             raise FileNotFoundError(
                 f"流式模型文件不完整，期望 {self.model_dir} 内含 "
-                "encoder.int8.onnx / decoder.onnx / joiner.int8.onnx / tokens.txt / bpe.model"
+                "encoder/decoder/joiner 的 .onnx（可带 int8/epoch 后缀）+ tokens.txt + bpe.model"
             )
 
         self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
