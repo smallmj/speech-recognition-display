@@ -98,6 +98,14 @@ pub enum EngineEvent {
         color: String,
         gender: Gender,
     },
+    /// LLM 整理结果的流式增量（SSE 每个 delta），前端据此逐字填充整理版。
+    /// 由壳层在 SSE 过程中 emit（engine 只定义类型与序列化契约，不产生该事件）。
+    #[serde(rename_all = "camelCase")]
+    SegmentCleaning {
+        segment_id: u64,
+        /// 截至当前 delta 的累积整理文本（部分结果）。
+        partial: String,
+    },
     #[serde(rename_all = "camelCase")]
     SegmentCleaned {
         segment_id: u64,

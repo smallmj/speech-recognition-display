@@ -12,16 +12,17 @@
 //!
 //! 时间模型：**逻辑时钟** —— 一切时刻是从管道创建起算的单调 [`Duration`]。
 //! 真实运行由调用方以固定节拍喂 `now`（如每 100ms 一次 `tick`/`step`）；
-//! 测试可任意推进时间而无需 `sleep`。`LlmPort` 通过 trait 注入，本票用
-//! [`MockLlmPort`] 验证管线（T9 再接真实 LLM）。
+//! 测试可任意推进时间而无需 `sleep`。`LlmPort` 通过 trait 注入，同步路径
+//! 用 [`MockLlmPort`] 验证管线；T9 起真实 LLM 由 Tauri 壳走异步路径驱动：
+//! 壳层 `tick(now)` 冻结并派发一个 `pending`，拿 [`CleanupPipeline::pending`]
+//! 调真实 OpenAI 兼容接口（SSE 流式），增量以 `SegmentCleaning` 事件 emit，
+//! 完成后经 [`CleanupPipeline::apply_cleanup_result`]（editId 校验）回填，
+//! 失败经 [`CleanupPipeline::fail_pending`] 置 `Failed` 回退原文。
 //!
 //! # 状态说明
 //!
-//! 本模块当前由引擎单元测试完整验证（见 `mod tests`）；真实消费方（Tauri 壳
-//! 接入、T9 真实 LLM 接入、与 `pipeline::Engine` 的串接）在后续票落地，接入前
-//! 允许「构造未使用」的 `dead_code` 告警，以保持本票只改 `lib.rs` 一行、不动
-//! 并行票（T2 `pipeline.rs`）文件的约束。
-#![allow(dead_code)]
+//! 本模块由引擎单元测试完整验证（见 `mod tests`），并自 T9 起经 `lib.rs` 的
+//! `pub use` 导出，供 Tauri 壳层（`src-tauri/src/pipeline.rs` 整理驱动）消费。
 
 use std::time::Duration;
 

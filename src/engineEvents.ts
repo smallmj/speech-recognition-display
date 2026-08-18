@@ -20,6 +20,11 @@ export interface Segment {
   editId?: number | null;
   ts: number;
   retries: number;
+  /**
+   * 客户端侧的流式整理增量（非 Rust 序列化字段）：收到 `segmentCleaning`
+   * 时累积，`segmentCleaned` / `cleanupFailed` 到达后清空。
+   */
+  cleaningPartial?: string | null;
 }
 
 export type EngineEvent =
@@ -35,6 +40,7 @@ export type EngineEvent =
       gender: Gender;
     }
   | { type: "partialResult"; text: string }
+  | { type: "segmentCleaning"; segmentId: number; partial: string }
   | { type: "segmentCleaned"; segmentId: number; cleaned: string; editId: number }
   | { type: "cleanupFailed"; segmentId: number }
   | { type: "minutesReady"; minutes: string };

@@ -11,11 +11,17 @@
 //!
 //! T2 新增 [crate::pipeline]：冒烟管线（[crate::pipeline::MockAsrPort] +
 //! [crate::pipeline::Engine]），把合成转写转化为带说话人/颜色的片段事件流。
+//!
+//! T8 新增 [crate::cleanup]：LLM 整理管线（防抖 + 固定节奏 + 单在途 + editId
+//! 校验 + 失败回退），并把 [crate::cleanup::CleanupPipeline] 等导出，供 Tauri
+//! 壳层经「`tick` 派发 pending → 调真实 LLM → `apply_cleanup_result` / 
+//! `fail_pending` 回填」的异步路径驱动（T9 真实 LLM 接入）。
 
 mod cleanup;
 mod pipeline;
 mod types;
 
+pub use cleanup::{CleanupPipeline, CleanupScheduler, MockLlmPort, PendingCleanup, SegmentStore};
 pub use pipeline::{speaker_color, Engine, MockAsrPort, SPEAKER_PALETTE};
 pub use types::{AsrPort, EmbeddingPort, EngineEvent, Gender, LlmPort, Segment, SegmentStatus, Utterance};
 
@@ -56,6 +62,23 @@ mod tests {
         let evt_json = serde_json::to_string(&evt).expect("serialize event");
         assert!(evt_json.contains("\"type\":\"segmentCleaned\""), "got: {evt_json}");
         assert!(evt_json.contains("\"segmentId\""), "got: {evt_json}");
+    }
+
+    /// T9 新增事件：LLM 流式增量的序列化契约（前端据此逐字填充整理版）。
+    #[test]
+    fn segment_cleaning_event_serializes_with_type_tag_and_camel_case() {
+        let evt = EngineEvent::SegmentCleaning {
+            segment_id: 3,
+            partial: "你好，我想".into(),
+        };
+        let json = serde_json::to_string(&evt).expect("serialize event");
+        assert!(json.contains("\"type\":\"segmentCleaning\""), "got: {json}");
+        assert!(json.contains("\"segmentId\":3"), "got: {json}");
+        assert!(json.contains("\"partial\":\"你好，我想\""), "got: {json}");
+
+        // 反序列化往返保持相等（前端桥接的 JSON 契约）
+        let back: EngineEvent = serde_json::from_str(&json).expect("deserialize event");
+        assert_eq!(evt, back);
     }
 
     /// T1 骨架测试：三个端口 trait 可被 mock 实现（测试缝成立）。

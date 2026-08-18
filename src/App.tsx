@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import BubbleFlow from "./components/BubbleFlow";
+import DualTrackView, { useEngineEvents } from "./components/DualTrackView";
+import LlmConfigPanel from "./components/LlmConfigPanel";
+import AsrLiveRow from "./components/AsrLiveRow";
 import { ENGINE_EVENT, STATUS_EVENT, type StatusPayload } from "./engineEvents";
 import { subscribe } from "./tauriEvent";
 import {
@@ -237,6 +239,9 @@ export default function App() {
 
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
+  // T9 主事件源：整理管线驱动（真实/合成转写 → 真实 LLM → 双轨事件流）。
+  const events = useEngineEvents();
+
   return (
     <DisplayContext.Provider value={display}>
       <div className="app">
@@ -286,11 +291,13 @@ export default function App() {
         </header>
 
         <main className="app-main">
-          <BubbleFlow />
+          <LlmConfigPanel />
+          <DualTrackView events={events} />
+          <AsrLiveRow />
         </main>
 
         <footer className="app-footer">
-          听障实时字幕展示系统 · Tauri 2 + React + engine（T4 真实本地 ASR）
+          听障实时字幕展示系统 · Tauri 2 + React + engine（T4 真实本地 ASR → T9 LLM 流式整理 → 双轨展示）
         </footer>
 
         {/* 置顶大字模式浮动退出按钮：头部隐藏后仍可一键退出（也可按 Esc） */}

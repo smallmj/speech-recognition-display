@@ -14,13 +14,16 @@
  * 渲染规则：
  * - 默认（整理版模式）：有 `cleaned` 显示整理版并高亮改动词；
  *   状态 `failed` 回退显示原文；尚未整理的 `active`/`frozen` 显示原文作占位。
+ * - 流式填充（T9）：收到 `segmentCleaning`（LLM SSE 增量）后、`segmentCleaned`
+ *   到达前，显示累积的 `cleaningPartial` 文本并带「整理中 · 流式…」标识，
+ *   最终结果到达后替换为整理版（diff 高亮）。
  * - 原文模式：一律显示原文 `raw`。
  */
 
 import { useMemo, useState } from "react";
 import { useEffect } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ENGINE_EVENT, type EngineEvent, type Segment } from "../engineEvents";
+import { subscribe } from "../tauriEvent";
 import { diffHighlight } from "./diff";
 import "./DualTrack.css";
 
@@ -43,14 +46,22 @@ export interface DualTrackViewProps {
 type DisplayMode = "cleaned" | "raw";
 
 /**
- * 把事件流规约到片段映射：`SegmentAppended` 增，`SegmentCleaned` 更新
- * （editId 校验：只接受更大值，防御乱序），`CleanupFailed` 置 Failed。
+ * 把事件流规约到片段映射：`SegmentAppended` 增，`SegmentCleaning` 累积流式
+ * 增量（`cleaningPartial`），`SegmentCleaned` 更新（editId 校验：只接受更大
+ * 值，防御乱序）并清空增量，`CleanupFailed` 置 Failed 并清空增量。
  */
 export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent): Map<number, Segment> {
   switch (evt.type) {
     case "segmentAppended": {
       const next = new Map(prev);
       next.set(evt.segment.id, evt.segment);
+      return next;
+    }
+    case "segmentCleaning": {
+      const seg = prev.get(evt.segmentId);
+      if (!seg) return prev;
+      const next = new Map(prev);
+      next.set(seg.id, { ...seg, cleaningPartial: evt.partial });
       return next;
     }
     case "segmentCleaned": {
@@ -64,6 +75,7 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
         cleaned: evt.cleaned,
         editId: evt.editId,
         status: "cleaned",
+        cleaningPartial: null, // 最终结果到达，流式增量作废
       });
       return next;
     }
@@ -71,7 +83,7 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
       const seg = prev.get(evt.segmentId);
       if (!seg) return prev;
       const next = new Map(prev);
-      next.set(seg.id, { ...seg, status: "failed" });
+      next.set(seg.id, { ...seg, status: "failed", cleaningPartial: null });
       return next;
     }
     default:
@@ -111,7 +123,7 @@ export function reduceSpeakerColors(events: EngineEvent[]): Map<number, string> 
 
 /**
  * 监听 `engine://event` 并累积事件流。返回按到达顺序排列的事件数组；
- * 组件卸载时自动取消监听。
+ * 组件卸载时自动取消订阅（经模块级单例 [subscribe]，StrictMode 安全）。
  *
  * 真实链路集成（一行）：
  * ```tsx
@@ -122,24 +134,19 @@ export function reduceSpeakerColors(events: EngineEvent[]): Map<number, string> 
 export function useEngineEvents(): EngineEvent[] {
   const [events, setEvents] = useState<EngineEvent[]>([]);
   useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
-    (async () => {
-      unlisten = await listen<EngineEvent>(ENGINE_EVENT, (event) => {
-        setEvents((prev) => [...prev, event.payload]);
-      });
-    })();
-    return () => {
-      if (unlisten) unlisten();
-    };
+    return subscribe(ENGINE_EVENT, (payload) => {
+      setEvents((prev) => [...prev, payload as EngineEvent]);
+    });
   }, []);
   return events;
 }
 
 /** 判断一条片段在给定模式下展示哪种文本。 */
-export function resolveMode(seg: Segment, mode: DisplayMode): "cleaned" | "raw" | "pending" {
+export function resolveMode(seg: Segment, mode: DisplayMode): "cleaned" | "raw" | "partial" | "pending" {
   if (mode === "raw") return "raw";
   if (seg.status === "failed") return "raw"; // 整理失败回退原文
   if (seg.status === "cleaned" && seg.cleaned != null) return "cleaned";
+  if (seg.cleaningPartial != null) return "partial"; // 流式整理中：显示增量
   return "pending"; // active/frozen：整理版未就绪，临时显示原文
 }
 
@@ -212,7 +219,12 @@ export default function DualTrackView({
                 <span className="dual-speaker" style={{ color }}>
                   说话人 {seg.speakerId}
                 </span>
-                {seg.status === "active" && <span className="dual-badge is-pending">整理中…</span>}
+                {segMode === "partial" && (
+                  <span className="dual-badge is-streaming">整理中 · 流式…</span>
+                )}
+                {segMode !== "partial" && seg.status === "active" && (
+                  <span className="dual-badge is-pending">整理中…</span>
+                )}
                 {seg.status === "failed" && <span className="dual-badge is-failed">整理失败 · 原文</span>}
               </div>
               <div
@@ -232,7 +244,16 @@ export default function DualTrackView({
                         <span key={i}>{run.text}</span>
                       ),
                     )
-                  : seg.raw}
+                  : segMode === "partial" && seg.cleaningPartial != null
+                    ? (
+                        <span className="dual-partial">
+                          {seg.cleaningPartial}
+                          <span className="dual-caret" aria-hidden>
+                            ▌
+                          </span>
+                        </span>
+                      )
+                    : seg.raw}
               </div>
             </div>
           );
