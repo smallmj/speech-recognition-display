@@ -7,12 +7,16 @@
 //!   （`llm-config.json`），`load_llm_config` / `save_llm_config` 两个
 //!   `#[tauri::command]` 供前端保存/读取。API Key 明文存储是 MVP 的已知
 //!   取舍（规格未要求加密）。
-//! - **OpenAI 兼容 SSE 客户端**：[OpenAiLlmClient::cleanup_stream] 阻塞式
-//!   POST `{base_url}/chat/completions`（`Authorization: Bearer`），逐行解析
-//!   `data: {...}`，取 `choices[0].delta.content` 增量回调。
+//! - **OpenAI 兼容 SSE 客户端**：[OpenAiLlmClient] 实现
+//!   [engine::LlmPort] 的 `cleanup_streaming`（阻塞式 POST
+//!   `{base_url}/chat/completions`，`Authorization: Bearer`，逐行解析
+//!   `data: {...}`，取 `choices[0].delta.content` 增量回调）。
 //! - **退避重试**：网络错误 / 非 2xx / SSE 解析错误 → 等比退避（500ms/1s/2s）
-//!   重试 3 次，全部失败返回 [LlmError]，由驱动线程经 `fail_pending` 置
-//!   `Failed`，前端回退展示原文（对齐 ADR-0003「失败退避重试 3 次后放弃」）。
+//!   重试 3 次（共 4 次尝试），全部失败返回 [LlmError]，由驱动线程经
+//!   `fail_pending` 置 `Failed`，前端回退展示原文（对齐 ADR-0003「失败退避
+//!   重试 3 次后放弃」）。
+//! - **输入窗口**：ADR-0003「单次输入 ≤500 字」——超长原文按标点切分只送
+//!   首个完整窗口；滚动窗口 ≤2000 token 的约束在 [MAX_INPUT_CHARS] 注释说明。
 //!
 //! **整理人设**：[DEFAULT_PERSONA] 内置整理人设（参考 TypeFlux 意图整理人设：
 //! 去口语化/纠错/补标点/不改意）；`LlmConfig.persona` 为空时自动回退内置默认。
@@ -28,11 +32,14 @@ use tauri::{AppHandle, Manager};
 /// 配置文件文件名（存于 app config 目录）。
 const CONFIG_FILE: &str = "llm-config.json";
 
-/// 内置整理人设（系统提示词）：口语化转写 → 通顺书面语。
+/// 内置整理人设（系统提示词）：口语化原文 → 通顺书面语。
 ///
 /// 风格对齐 TypeFlux 意图整理人设：去口语化、纠错、补标点、不改变原意、
 /// 不添加原话没有的信息、直接输出整理结果。
-pub const DEFAULT_PERSONA: &str = "你是实时字幕整理助手：把用户提供的口语化转写整理成通顺的书面语，去口语化、纠正错别字、补充标点，不改变原意，不添加原话没有的信息。直接输出整理结果，不要任何解释或前缀。";
+///
+/// **权威源在本文件**；前端 `src/components/LlmConfigPanel.tsx` 的
+/// `DEFAULT_PERSONA` 与此保持一致（「恢复内置人设」按钮用），改动需两处同步。
+pub const DEFAULT_PERSONA: &str = "你是实时字幕整理助手：把用户提供的口语化原文整理成通顺的书面语，去口语化、纠正错别字、补充标点，不改变原意，不添加原话没有的信息。直接输出整理结果，不要任何解释或前缀。";
 
 /// OpenAI 兼容接口配置（serde camelCase，与前端契约对齐；字段缺省用 [Default]）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,16 +139,21 @@ impl std::fmt::Display for LlmError {
     }
 }
 
-/// OpenAI 兼容客户端：配置 + 流式整理 + 退避重试。
+/// OpenAI 兼容客户端：配置 + 流式整理 + 退避重试。实现 [engine::LlmPort]。
 pub struct OpenAiLlmClient {
     config: LlmConfig,
     agent: ureq::Agent,
 }
 
-/// 最大重试次数（1 次初始请求 + 最多 3 次重试，对齐 ADR-0003「重试 3 次后放弃」）。
-const MAX_RETRIES: u32 = 3;
-/// 退避间隔（等比：第 i 次重试前等待 `BACKOFF_MS[i]` 毫秒）。
+/// 最大尝试次数（1 次初始请求 + 3 次重试，对齐 ADR-0003「重试 3 次后放弃」）。
+const MAX_ATTEMPTS: u32 = 4;
+/// 退避间隔（等比：第 i 次重试前等待 `BACKOFF_MS[i]` 毫秒；共 3 次重试）。
 const BACKOFF_MS: [u64; 3] = [500, 1000, 2000];
+
+/// ADR-0003「单次输入 ≤500 字」：超长原文按标点切分只送首个完整窗口。
+/// 滚动窗口 ≤2000 token 的约束由本常量 + 每条 final 片段天然较短共同满足
+/// （估算 ~1 token/汉字，500 字 ≈ 500-700 token，留足滚动上文余量）。
+const MAX_INPUT_CHARS: usize = 500;
 
 impl OpenAiLlmClient {
     pub fn new(config: LlmConfig) -> Self {
@@ -155,40 +167,29 @@ impl OpenAiLlmClient {
         }
     }
 
-    pub fn config(&self) -> &LlmConfig {
-        &self.config
-    }
-
-    /// 流式整理：SSE 每个 delta 调用 `on_delta`（参数为**截至当前**的累积文本，
-    /// 前端据此逐字填充）。成功返回完整整理结果；重试 3 次仍失败返回 [LlmError]。
-    pub fn cleanup_stream(
-        &self,
-        raw: &str,
-        mut on_delta: impl FnMut(&str),
-    ) -> Result<String, LlmError> {
-        let mut last_err: Option<LlmError> = None;
-        for attempt in 0..=MAX_RETRIES {
-            if attempt > 0 {
-                let backoff = BACKOFF_MS[(attempt - 1) as usize];
-                println!("[llm] 重试 {attempt}/{MAX_RETRIES}（{backoff}ms 后）");
-                std::thread::sleep(Duration::from_millis(backoff));
-            }
-            match self.stream_once(raw, &mut on_delta) {
-                Ok(text) => return Ok(text),
-                Err(e) => {
-                    println!("[llm] 第 {} 次请求失败: {e}", attempt + 1);
-                    last_err = Some(e);
-                }
-            }
+    /// 把原文截到首个完整窗口：≤[MAX_INPUT_CHARS] 直接返回；超长则在窗口内
+    /// 最后一个句末标点（。！？…）处切断（保留标点），找不到标点则硬截断。
+    /// 不改变原意——只发送窗口内的内容，窗口外内容由后续片段另行整理。
+    fn clip_input_window(raw: &str) -> String {
+        if raw.chars().count() <= MAX_INPUT_CHARS {
+            return raw.to_string();
         }
-        Err(last_err.unwrap_or_else(|| LlmError::Stream("未知错误".to_string())))
+        let chars: Vec<char> = raw.chars().collect();
+        let limit = MAX_INPUT_CHARS.min(chars.len());
+        // 找窗口内最后一个句末标点位置（不含窗口边界）
+        let cut = (0..limit)
+            .rev()
+            .find(|&i| matches!(chars[i], '。' | '！' | '？' | '…'))
+            .map(|i| i + 1) // 保留标点本身
+            .unwrap_or(limit);
+        chars[..cut].iter().collect()
     }
 
     /// 单次流式请求：POST chat/completions，逐行解析 SSE，回调增量。
     fn stream_once(
         &self,
         raw: &str,
-        on_delta: &mut impl FnMut(&str),
+        on_delta: &mut dyn FnMut(&str),
     ) -> Result<String, LlmError> {
         let body = serde_json::json!({
             "model": self.config.model,
@@ -268,5 +269,47 @@ impl OpenAiLlmClient {
             .or_else(|| v.pointer("/choices/0/delta/content").and_then(|c| c.as_str()))
             .ok_or_else(|| LlmError::Stream("响应中未找到整理内容".to_string()))?;
         Ok(text.to_string())
+    }
+}
+
+/// 实现 [engine::LlmPort]：驱动侧经 trait 对象调用（`Box<dyn LlmPort>`），
+/// engine 测试缝可覆盖流式路径；失败返回错误信息由驱动走 `fail_pending`。
+impl engine::LlmPort for OpenAiLlmClient {
+    fn cleanup(&self, text: &str) -> String {
+        // 同步兜底：不做真实请求（网络调用只在流式路径发生）；
+        // 直接返回原文保证不丢内容（调用方不应走本方法）。
+        text.to_string()
+    }
+
+    fn cleanup_streaming(
+        &self,
+        raw: &str,
+        on_partial: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        // ADR-0003 输入窗口：超 500 字只送首个完整窗口。
+        let window = Self::clip_input_window(raw);
+        let mut last_err: Option<LlmError> = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            if attempt > 0 {
+                let backoff = BACKOFF_MS[(attempt - 1) as usize];
+                println!("[llm] 重试 {attempt}/{}（{backoff}ms 后）", MAX_ATTEMPTS - 1);
+                std::thread::sleep(Duration::from_millis(backoff));
+            }
+            match self.stream_once(&window, on_partial) {
+                Ok(text) => return Ok(text),
+                Err(e) => {
+                    println!("[llm] 第 {} 次请求失败: {e}", attempt + 1);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| LlmError::Stream("未知错误".to_string()))
+            .to_string())
+    }
+
+    fn summarize(&self, _chunks: &[String]) -> String {
+        // T10 起接入真实纪要（本文件在 T9 分支暂无调用方）。
+        String::new()
     }
 }

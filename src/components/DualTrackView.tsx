@@ -60,8 +60,17 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
     case "segmentCleaning": {
       const seg = prev.get(evt.segmentId);
       if (!seg) return prev;
+      // editId 乱序防御（对齐 engine 的 editId 单调校验）：
+      // 同一流式请求内 editId 不变，只接受 `editId >= 当前` 的增量——
+      // 旧请求的残余 delta（editId 更小）在重试/新请求开始后被拒绝。
+      const currentEdit = seg.editId ?? seg.cleaningEditId ?? -1;
+      if (evt.editId < currentEdit) return prev;
       const next = new Map(prev);
-      next.set(seg.id, { ...seg, cleaningPartial: evt.partial });
+      next.set(seg.id, {
+        ...seg,
+        cleaningPartial: evt.partial,
+        cleaningEditId: evt.editId,
+      });
       return next;
     }
     case "segmentCleaned": {
@@ -76,6 +85,7 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
         editId: evt.editId,
         status: "cleaned",
         cleaningPartial: null, // 最终结果到达，流式增量作废
+        cleaningEditId: null,
       });
       return next;
     }
@@ -83,7 +93,7 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
       const seg = prev.get(evt.segmentId);
       if (!seg) return prev;
       const next = new Map(prev);
-      next.set(seg.id, { ...seg, status: "failed", cleaningPartial: null });
+      next.set(seg.id, { ...seg, status: "failed", cleaningPartial: null, cleaningEditId: null });
       return next;
     }
     default:

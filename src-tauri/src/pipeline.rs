@@ -125,16 +125,25 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
             // 3. 时钟滴答：防抖/节奏触发 → 冻结 active → 派发一个 pending（单在途）。
             pipeline.tick(now);
 
-            // 4. 有 pending → 调真实 LLM（SSE 流式）：增量 emit，完成/失败回填。
+            // 4. 有 pending → 经 LlmPort trait 调真实/mock LLM（SSE 流式）：
+            //    增量 emit，完成/失败回填。
             if let Some(p) = pipeline.pending().cloned() {
-                // 每次请求前重读配置：前端保存配置后无需重启即生效。
-                let client = OpenAiLlmClient::new(llm::read_config(&handle));
+                // 每次请求前重读配置：配置了有效 API Key 用真实客户端，
+                // 否则用 MockLlmPort（未配置时整理降级为占位，ASR 不受影响）。
+                let cfg = llm::read_config(&handle);
+                let llm_port: Box<dyn engine::LlmPort> = if cfg.api_key.trim().is_empty() {
+                    println!("[llm] 未配置 API Key，整理降级为 mock 占位");
+                    Box::new(MockLlmPort)
+                } else {
+                    Box::new(OpenAiLlmClient::new(cfg))
+                };
                 println!("[llm] segment {} 送 LLM 整理（{} 字）", p.segment_id, p.raw.chars().count());
-                let result = client.cleanup_stream(&p.raw, |partial| {
+                let result = llm_port.cleanup_streaming(&p.raw, &mut |partial| {
                     emit(
                         &handle,
                         EngineEvent::SegmentCleaning {
                             segment_id: p.segment_id,
+                            edit_id: p.edit_id,
                             partial: partial.to_string(),
                         },
                     );

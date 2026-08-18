@@ -20,9 +20,12 @@ export interface LlmConfig {
   persona: string | null;
 }
 
-/** 内置整理人设（与 Rust `DEFAULT_PERSONA` 保持一致；「恢复内置人设」按钮用）。 */
+/**
+ * 内置整理人设（与 Rust `src-tauri/src/llm.rs` 的 `DEFAULT_PERSONA` 保持一致；
+ * **权威源在 Rust 端**，改动需两处同步；「恢复内置人设」按钮用）。
+ */
 export const DEFAULT_PERSONA =
-  "你是实时字幕整理助手：把用户提供的口语化转写整理成通顺的书面语，去口语化、纠正错别字、补充标点，不改变原意，不添加原话没有的信息。直接输出整理结果，不要任何解释或前缀。";
+  "你是实时字幕整理助手：把用户提供的口语化原文整理成通顺的书面语，去口语化、纠正错别字、补充标点，不改变原意，不添加原话没有的信息。直接输出整理结果，不要任何解释或前缀。";
 
 export default function LlmConfigPanel() {
   const [open, setOpen] = useState(false);

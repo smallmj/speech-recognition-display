@@ -25,6 +25,11 @@ export interface Segment {
    * 时累积，`segmentCleaned` / `cleanupFailed` 到达后清空。
    */
   cleaningPartial?: string | null;
+  /**
+   * 客户端侧的流式整理 editId（非 Rust 序列化字段）：`segmentCleaning` 的
+   * editId，用于拒绝乱序残余增量（只接受 `>= 当前`）。
+   */
+  cleaningEditId?: number | null;
 }
 
 export type EngineEvent =
@@ -40,7 +45,13 @@ export type EngineEvent =
       gender: Gender;
     }
   | { type: "partialResult"; text: string }
-  | { type: "segmentCleaning"; segmentId: number; partial: string }
+  | {
+      type: "segmentCleaning";
+      segmentId: number;
+      /** 本次流式请求的 editId（同一请求内不变）；渲染层只接受 `>= 当前` 的增量。 */
+      editId: number;
+      partial: string;
+    }
   | { type: "segmentCleaned"; segmentId: number; cleaned: string; editId: number }
   | { type: "cleanupFailed"; segmentId: number }
   | { type: "minutesReady"; minutes: string };
