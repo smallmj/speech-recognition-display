@@ -5,7 +5,7 @@
 
 | 票 | Issue | 标题 | Blocked by | 状态 |
 |----|-------|------|-----------|------|
-| T1 | [#2](https://github.com/smallmj/speech-recognition-display/issues/2) | 工程脚手架 | 无 | ready-for-agent |
+| T1 | [#2](https://github.com/smallmj/speech-recognition-display/issues/2) | 工程脚手架 | 无 | ✅ 已完成 (98aef4a) |
 | T2 | [#3](https://github.com/smallmj/speech-recognition-display/issues/3) | 冒烟管线：合成转写 → 气泡流 | T1 | ready-for-agent |
 | T3 | [#4](https://github.com/smallmj/speech-recognition-display/issues/4) | 显示定制：主题 + 置顶大字模式 + 文字样式 | T2 | ready-for-agent |
 | T4 | [#5](https://github.com/smallmj/speech-recognition-display/issues/5) | 真实麦克风 + 本地流式 ASR（sherpa-onnx） | T2 | ready-for-agent |
@@ -21,7 +21,12 @@
 
 ## Frontier（可立即开始）
 
-- **T1**（无阻塞）—— 唯一无阻塞票，是整个实施链的起点。
+- **T1 ✅ 已完成**（98aef4a）
+- **T2（冒烟管线）**—— 解锁！T1 完成
+- **T4（真实麦克风 + ASR）**—— 与 T2 可并行
+- **T8（LLM 整理管线）**—— 与 T2 可并行
+- **T3（显示定制）**—— 阻塞于 T2
+- **T13（托盘 + 热键）**—— 阻塞于 T2
 
 ## 依赖图（简）
 
