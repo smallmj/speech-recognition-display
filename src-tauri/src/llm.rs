@@ -79,6 +79,80 @@ impl LlmConfig {
     pub fn chat_url(&self) -> String {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
+
+    /// models 完整 URL（OpenAI 兼容接口）。
+    pub fn models_url(base_url: &str) -> String {
+        format!("{}/models", base_url.trim_end_matches('/'))
+    }
+}
+
+/// OpenAI 兼容 `/models` 返回的可选模型。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmModelSummary {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_by: Option<String>,
+}
+
+/// 前端获取模型列表命令：使用设置面板当前填写的 Base URL / API Key，
+/// 调 OpenAI 兼容 `GET /models`，返回可选中模型。该命令不保存配置。
+#[tauri::command]
+pub fn list_llm_models(base_url: String, api_key: String) -> Result<Vec<LlmModelSummary>, String> {
+    let trimmed_base = base_url.trim();
+    let trimmed_key = api_key.trim();
+    if trimmed_base.is_empty() {
+        return Err("请先填写 Base URL".to_string());
+    }
+    if trimmed_key.is_empty() {
+        return Err("请先填写 API Key".to_string());
+    }
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(30))
+        .build();
+    let resp = agent
+        .get(&LlmConfig::models_url(trimmed_base))
+        .set("Authorization", &format!("Bearer {trimmed_key}"))
+        .call()
+        .map_err(|e| format!("获取模型列表失败: {e}"))?;
+
+    let status = resp.status();
+    if !(200..300).contains(&status) {
+        let body = resp.into_string().unwrap_or_default();
+        return Err(format!("获取模型列表失败: HTTP {status}: {body}"));
+    }
+
+    let body = resp
+        .into_string()
+        .map_err(|e| format!("读取模型列表失败: {e}"))?;
+    parse_model_list_response(&body).map_err(|e| format!("解析模型列表失败: {e}"))
+}
+
+/// 解析 OpenAI 兼容 `/models` 响应：`data[].id`。
+fn parse_model_list_response(raw: &str) -> Result<Vec<LlmModelSummary>, String> {
+    #[derive(Deserialize)]
+    struct ApiModel {
+        id: String,
+        owned_by: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct ModelListResponse {
+        data: Vec<ApiModel>,
+    }
+
+    serde_json::from_str::<ModelListResponse>(raw)
+        .map(|resp| {
+            resp.data
+                .into_iter()
+                .map(|model| LlmModelSummary {
+                    id: model.id,
+                    owned_by: model.owned_by,
+                })
+                .collect()
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// 配置文件路径（app config 目录下）。
@@ -156,6 +230,80 @@ const BACKOFF_MS: [u64; 3] = [500, 1000, 2000];
 /// （该上限主要约束 T10 纪要的分批汇总，逐段整理路径无需维护滚动上下文）。
 const MAX_INPUT_CHARS: usize = 500;
 
+/// 大小写不敏感地查找标签位置（标签均为 ASCII，字节窗口不会切断 UTF-8 字符）。
+fn find_tag_from(haystack: &str, tag: &str, from: usize) -> Option<usize> {
+    let bytes = haystack.as_bytes();
+    let tag_bytes = tag.as_bytes();
+    if from > bytes.len() || bytes.len() < tag_bytes.len() {
+        return None;
+    }
+    (from..=bytes.len() - tag_bytes.len())
+        .find(|&start| bytes[start..start + tag_bytes.len()].eq_ignore_ascii_case(tag_bytes))
+}
+
+/// 隐藏模型输出中的思考内容：
+/// - 完整 `<think>...</think>` 保留标签外的正文；
+/// - 流式输出尚未闭合时，只显示标签前已有正文；
+/// - 流式输出刚开始出现 `<thin` 这类未完整标签时暂缓显示，避免闪出半截标签。
+fn strip_reasoning_tags(input: &str) -> String {
+    const OPEN_TAG: &str = "<think>";
+    const CLOSE_TAG: &str = "</think>";
+    let mut output = String::new();
+    let mut cursor = 0usize;
+    let mut inside_reasoning = false;
+
+    while cursor < input.len() {
+        if inside_reasoning {
+            match find_tag_from(input, CLOSE_TAG, cursor) {
+                Some(end) => {
+                    cursor = end + CLOSE_TAG.len();
+                    inside_reasoning = false;
+                }
+                None => break,
+            }
+        } else {
+            let open = find_tag_from(input, OPEN_TAG, cursor);
+            let close = find_tag_from(input, CLOSE_TAG, cursor);
+            match (open, close) {
+                (Some(start), Some(end)) if end < start => {
+                    output.push_str(&input[cursor..end]);
+                    cursor = end + CLOSE_TAG.len();
+                }
+                (Some(start), _) => {
+                    output.push_str(&input[cursor..start]);
+                    cursor = start + OPEN_TAG.len();
+                    inside_reasoning = true;
+                }
+                (None, Some(end)) => {
+                    output.push_str(&input[cursor..end]);
+                    cursor = end + CLOSE_TAG.len();
+                }
+                (None, None) => {
+                    output.push_str(&input[cursor..]);
+                    break;
+                }
+            }
+        }
+    }
+
+    // 流式期间 `<thi` 可能是尚未到齐的 `<think>` 前缀；先隐藏，下一帧再判断。
+    if !inside_reasoning {
+        for len in (1..OPEN_TAG.len()).rev() {
+            let output_bytes = output.as_bytes();
+            if output_bytes.len() >= len
+                && output_bytes[output_bytes.len() - len..]
+                    .eq_ignore_ascii_case(&OPEN_TAG.as_bytes()[..len])
+            {
+                let boundary = output.len() - len;
+                output.truncate(boundary);
+                break;
+            }
+        }
+    }
+
+    output.trim_start().to_string()
+}
+
 impl OpenAiLlmClient {
     pub fn new(config: LlmConfig) -> Self {
         Self {
@@ -192,11 +340,7 @@ impl OpenAiLlmClient {
     }
 
     /// 单次流式请求：POST chat/completions，逐行解析 SSE，回调增量。
-    fn stream_once(
-        &self,
-        raw: &str,
-        on_delta: &mut dyn FnMut(&str),
-    ) -> Result<String, LlmError> {
+    fn stream_once(&self, raw: &str, on_delta: &mut dyn FnMut(&str)) -> Result<String, LlmError> {
         let body = serde_json::json!({
             "model": self.config.model,
             "messages": [
@@ -217,7 +361,10 @@ impl OpenAiLlmClient {
         let status = resp.status();
         if !(200..300).contains(&status) {
             let body_text = resp.into_string().unwrap_or_default();
-            return Err(LlmError::Http { status, body: body_text });
+            return Err(LlmError::Http {
+                status,
+                body: body_text,
+            });
         }
 
         // 按 Content-Type 分流：SSE（text/event-stream）逐行流式解析；
@@ -245,21 +392,29 @@ impl OpenAiLlmClient {
             if payload == "[DONE]" {
                 break;
             }
-            let chunk: serde_json::Value = serde_json::from_str(payload)
-                .map_err(|e| LlmError::Stream(format!("SSE JSON 解析失败: {e}（行: {payload}）")))?;
+            let chunk: serde_json::Value = serde_json::from_str(payload).map_err(|e| {
+                LlmError::Stream(format!("SSE JSON 解析失败: {e}（行: {payload}）"))
+            })?;
             // 空 choices / 无 delta 的保活帧直接跳过
             if let Some(content) = chunk
                 .pointer("/choices/0/delta/content")
                 .and_then(|v| v.as_str())
             {
                 accumulated.push_str(content);
-                on_delta(&accumulated);
+                let visible = strip_reasoning_tags(&accumulated);
+                on_delta(&visible);
             }
         }
         if accumulated.is_empty() {
             return Err(LlmError::Stream("SSE 流结束但未收到任何内容".to_string()));
         }
-        Ok(accumulated)
+        let visible = strip_reasoning_tags(&accumulated);
+        if visible.trim().is_empty() {
+            return Err(LlmError::Stream(
+                "模型只返回了思考内容，没有整理结果".to_string(),
+            ));
+        }
+        Ok(visible)
     }
 
     /// 非 SSE 响应兜底：整段 JSON 取 `choices[0].message.content`（或 delta.content）。
@@ -272,9 +427,18 @@ impl OpenAiLlmClient {
         let text = v
             .pointer("/choices/0/message/content")
             .and_then(|c| c.as_str())
-            .or_else(|| v.pointer("/choices/0/delta/content").and_then(|c| c.as_str()))
+            .or_else(|| {
+                v.pointer("/choices/0/delta/content")
+                    .and_then(|c| c.as_str())
+            })
             .ok_or_else(|| LlmError::Stream("响应中未找到整理内容".to_string()))?;
-        Ok(text.to_string())
+        let visible = strip_reasoning_tags(text);
+        if visible.trim().is_empty() {
+            return Err(LlmError::Stream(
+                "模型只返回了思考内容，没有整理结果".to_string(),
+            ));
+        }
+        Ok(visible)
     }
 }
 
@@ -305,7 +469,10 @@ impl engine::LlmPort for OpenAiLlmClient {
             for attempt in 0..MAX_ATTEMPTS {
                 if attempt > 0 {
                     let backoff = BACKOFF_MS[(attempt - 1) as usize];
-                    println!("[llm] 重试 {attempt}/{}（{backoff}ms 后）", MAX_ATTEMPTS - 1);
+                    println!(
+                        "[llm] 重试 {attempt}/{}（{backoff}ms 后）",
+                        MAX_ATTEMPTS - 1
+                    );
                     std::thread::sleep(Duration::from_millis(backoff));
                 }
                 // partial 携带「已完成窗口拼接前缀 + 当前窗口增量」，保证整段
@@ -349,6 +516,7 @@ impl engine::LlmPort for OpenAiLlmClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::LlmPort;
 
     /// 回归：超 500 字原文必须被完全覆盖（切成多个窗口），绝不静默丢内容。
     /// 修复前的 `clip_input_window` 只返回首个窗口、丢弃其余——违反"不改意/不丢内容"。
@@ -358,7 +526,10 @@ mod tests {
         let raw: String = "字".repeat(1200);
         let ws = OpenAiLlmClient::input_windows(&raw);
         assert_eq!(ws.len(), 3, "应切成 3 个窗口");
-        assert!(ws.iter().all(|w| w.chars().count() <= MAX_INPUT_CHARS), "每窗口 ≤500 字");
+        assert!(
+            ws.iter().all(|w| w.chars().count() <= MAX_INPUT_CHARS),
+            "每窗口 ≤500 字"
+        );
         assert_eq!(ws.concat(), raw, "拼接后必须与原文逐字一致（不丢内容）");
     }
 
@@ -386,5 +557,169 @@ mod tests {
         let raw = "你好，简短的一句话。";
         let ws = OpenAiLlmClient::input_windows(raw);
         assert_eq!(ws, vec![raw.to_string()]);
+    }
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if haystack.len() < needle.len() {
+            return None;
+        }
+        (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
+    }
+
+    /// 回归：带思考标签的模型不能把 `<think>...</think>` 泄露到实时字幕。
+    #[test]
+    fn cleanup_streaming_hides_reasoning_tags() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().unwrap();
+
+            // 等完整请求体读完再写响应，避免与客户端写入交错导致连接错误。
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                let Some(header_end) = find_subslice(&request, b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]).to_lowercase();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+
+            let body = concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Type: text/event-stream\r\n",
+                "Connection: close\r\n\r\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"<think>reasoning</think>\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\" 哈喽，你好。\"}}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let _ = stream.write_all(body.as_bytes());
+        });
+
+        let config = LlmConfig {
+            base_url: format!("http://{addr}"),
+            api_key: "test-key".to_string(),
+            model: "thinking-model".to_string(),
+            persona: None,
+        };
+        let client = OpenAiLlmClient::new(config);
+        let mut partials = Vec::new();
+        let cleaned = client
+            .cleanup_streaming("哈喽", &mut |partial| partials.push(partial.to_string()))
+            .unwrap();
+
+        assert_eq!(cleaned, "哈喽，你好。");
+        assert!(
+            partials
+                .iter()
+                .all(|p| !p.contains("think") && !p.contains("reasoning")),
+            "所有流式增量都必须隐藏思考内容: {partials:?}"
+        );
+    }
+
+    /// 回归：返回给前端的模型摘要必须使用 camelCase 字段。
+    #[test]
+    fn model_summary_serializes_with_camel_case() {
+        let value = serde_json::to_value(LlmModelSummary {
+            id: "model-a".to_string(),
+            owned_by: Some("openai".to_string()),
+        })
+        .unwrap();
+        assert_eq!(value["id"], "model-a");
+        assert_eq!(value["ownedBy"], "openai");
+    }
+
+    /// 回归：流式未闭合的思考内容必须保持隐藏，且不能闪出半截标签。
+    #[test]
+    fn strips_partial_reasoning_stream() {
+        assert_eq!(strip_reasoning_tags("<think>reasoning"), "");
+        assert_eq!(strip_reasoning_tags("<thi"), "");
+        assert_eq!(
+            strip_reasoning_tags("<think>reasoning</think> 哈喽，你好。"),
+            "哈喽，你好。"
+        );
+    }
+
+    /// 回归：获取模型列表必须请求 `/models` 并携带 Authorization。
+    #[test]
+    fn lists_models_from_openai_compatible_endpoint() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            if n == 0 {
+                return;
+            }
+            request.extend_from_slice(&buf[..n]);
+            let request = String::from_utf8_lossy(&request);
+            assert!(
+                request.starts_with("GET /models HTTP/1.1"),
+                "请求路径: {request}"
+            );
+            assert!(
+                request.contains("Authorization: Bearer test-key"),
+                "请求头: {request}"
+            );
+
+            let body = r#"{"object":"list","data":[{"id":"model-a","owned_by":"openai"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+
+        let models = list_llm_models(format!("http://{addr}"), "test-key".to_string()).unwrap();
+        assert_eq!(
+            models,
+            vec![LlmModelSummary {
+                id: "model-a".to_string(),
+                owned_by: Some("openai".to_string())
+            }]
+        );
+    }
+
+    /// 回归：OpenAI 兼容 `/models` 响应必须解析成可选项。
+    #[test]
+    fn parses_openai_compatible_model_list() {
+        let raw = serde_json::json!({
+            "object": "list",
+            "data": [
+                { "id": "model-a", "object": "model", "owned_by": "openai" },
+                { "id": "model-b", "object": "model", "owned_by": "system" }
+            ]
+        });
+        let models = parse_model_list_response(&raw.to_string()).unwrap();
+        assert_eq!(
+            models,
+            vec![
+                LlmModelSummary {
+                    id: "model-a".to_string(),
+                    owned_by: Some("openai".to_string())
+                },
+                LlmModelSummary {
+                    id: "model-b".to_string(),
+                    owned_by: Some("system".to_string())
+                },
+            ]
+        );
     }
 }
