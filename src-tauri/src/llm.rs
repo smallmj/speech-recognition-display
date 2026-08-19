@@ -150,9 +150,10 @@ const MAX_ATTEMPTS: u32 = 4;
 /// 退避间隔（等比：第 i 次重试前等待 `BACKOFF_MS[i]` 毫秒；共 3 次重试）。
 const BACKOFF_MS: [u64; 3] = [500, 1000, 2000];
 
-/// ADR-0003「单次输入 ≤500 字」：超长原文按标点切分只送首个完整窗口。
-/// 滚动窗口 ≤2000 token 的约束由本常量 + 每条 final 片段天然较短共同满足
-/// （估算 ~1 token/汉字，500 字 ≈ 500-700 token，留足滚动上文余量）。
+/// ADR-0003「单次输入 ≤500 字」：超长原文切成多个 ≤500 字窗口**逐个整理并
+/// 拼接**（[OpenAiLlmClient::input_windows]），不丢内容也不改意。每个窗口
+/// ≤500 字 ≈ ≤700 token，故单请求天然低于「滚动窗口 ≤2000 token」上限
+/// （该上限主要约束 T10 纪要的分批汇总，逐段整理路径无需维护滚动上下文）。
 const MAX_INPUT_CHARS: usize = 500;
 
 impl OpenAiLlmClient {
@@ -167,22 +168,27 @@ impl OpenAiLlmClient {
         }
     }
 
-    /// 把原文截到首个完整窗口：≤[MAX_INPUT_CHARS] 直接返回；超长则在窗口内
-    /// 最后一个句末标点（。！？…）处切断（保留标点），找不到标点则硬截断。
-    /// 不改变原意——只发送窗口内的内容，窗口外内容由后续片段另行整理。
-    fn clip_input_window(raw: &str) -> String {
-        if raw.chars().count() <= MAX_INPUT_CHARS {
-            return raw.to_string();
-        }
+    /// 把原文切成若干 ≤[MAX_INPUT_CHARS] 的窗口，**覆盖全文（不丢内容）**。
+    /// 优先在窗口内最后一个句末标点（。！？…）处切分（保留标点），找不到标点
+    /// 则硬截断到窗口上限；下一窗口从切断处继续，直至覆盖全部字符。
+    fn input_windows(raw: &str) -> Vec<String> {
         let chars: Vec<char> = raw.chars().collect();
-        let limit = MAX_INPUT_CHARS.min(chars.len());
-        // 找窗口内最后一个句末标点位置（不含窗口边界）
-        let cut = (0..limit)
-            .rev()
-            .find(|&i| matches!(chars[i], '。' | '！' | '？' | '…'))
-            .map(|i| i + 1) // 保留标点本身
-            .unwrap_or(limit);
-        chars[..cut].iter().collect()
+        let mut windows = Vec::new();
+        let mut start = 0usize;
+        while start < chars.len() {
+            let end = (start + MAX_INPUT_CHARS).min(chars.len());
+            // 找窗口内最后一个句末标点（不含 end 边界），切在标点之后；否则硬截到 end。
+            let cut = (start..end)
+                .rev()
+                .find(|&i| matches!(chars[i], '。' | '！' | '？' | '…'))
+                .map(|i| i + 1)
+                .unwrap_or(end);
+            // 防御：若标点切分导致窗口为空（cut <= start），退回 hard 截断。
+            let cut = if cut <= start { end } else { cut };
+            windows.push(chars[start..cut].iter().collect());
+            start = cut;
+        }
+        windows
     }
 
     /// 单次流式请求：POST chat/completions，逐行解析 SSE，回调增量。
@@ -286,30 +292,99 @@ impl engine::LlmPort for OpenAiLlmClient {
         raw: &str,
         on_partial: &mut dyn FnMut(&str),
     ) -> Result<String, String> {
-        // ADR-0003 输入窗口：超 500 字只送首个完整窗口。
-        let window = Self::clip_input_window(raw);
-        let mut last_err: Option<LlmError> = None;
-        for attempt in 0..MAX_ATTEMPTS {
-            if attempt > 0 {
-                let backoff = BACKOFF_MS[(attempt - 1) as usize];
-                println!("[llm] 重试 {attempt}/{}（{backoff}ms 后）", MAX_ATTEMPTS - 1);
-                std::thread::sleep(Duration::from_millis(backoff));
+        // ADR-0003「单次输入 ≤500 字」：把原文切成全覆盖窗口，逐窗口整理后拼接，
+        // 不丢内容也不改意。每个窗口 ≤500 字（≈≤700 token），故单请求远低于
+        // 「滚动窗口 ≤2000 token」上限（该约束主要约束 T10 纪要的分批汇总，
+        // 逐段整理路径天然满足、无滚动上下文需要维护）。
+        let windows = Self::input_windows(raw);
+        let mut finished_prefix = String::new();
+
+        for window in windows {
+            let mut last_err: Option<LlmError> = None;
+            let mut cleaned: Option<String> = None;
+            for attempt in 0..MAX_ATTEMPTS {
+                if attempt > 0 {
+                    let backoff = BACKOFF_MS[(attempt - 1) as usize];
+                    println!("[llm] 重试 {attempt}/{}（{backoff}ms 后）", MAX_ATTEMPTS - 1);
+                    std::thread::sleep(Duration::from_millis(backoff));
+                }
+                // partial 携带「已完成窗口拼接前缀 + 当前窗口增量」，保证整段
+                // 视角的整理文本随时间单调（重试时当前窗口重置，前缀不变，
+                // 前端用长度单调守卫抑制回退抖动）。
+                let prefix = finished_prefix.clone();
+                match self.stream_once(&window, &mut |partial| {
+                    let mut full = prefix.clone();
+                    full.push_str(partial);
+                    on_partial(&full);
+                }) {
+                    Ok(text) => {
+                        cleaned = Some(text);
+                        break;
+                    }
+                    Err(e) => {
+                        println!("[llm] 第 {} 次请求失败: {e}", attempt + 1);
+                        last_err = Some(e);
+                    }
+                }
             }
-            match self.stream_once(&window, on_partial) {
-                Ok(text) => return Ok(text),
-                Err(e) => {
-                    println!("[llm] 第 {} 次请求失败: {e}", attempt + 1);
-                    last_err = Some(e);
+            match cleaned {
+                Some(text) => finished_prefix.push_str(&text),
+                None => {
+                    return Err(last_err
+                        .unwrap_or_else(|| LlmError::Stream("未知错误".to_string()))
+                        .to_string());
                 }
             }
         }
-        Err(last_err
-            .unwrap_or_else(|| LlmError::Stream("未知错误".to_string()))
-            .to_string())
+
+        Ok(finished_prefix)
     }
 
     fn summarize(&self, _chunks: &[String]) -> String {
         // T10 起接入真实纪要（本文件在 T9 分支暂无调用方）。
         String::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：超 500 字原文必须被完全覆盖（切成多个窗口），绝不静默丢内容。
+    /// 修复前的 `clip_input_window` 只返回首个窗口、丢弃其余——违反"不改意/不丢内容"。
+    #[test]
+    fn input_windows_cover_full_text_without_loss() {
+        // 1200 字无标点：应切成 3 个窗口（500 + 500 + 200），拼接回原文。
+        let raw: String = "字".repeat(1200);
+        let ws = OpenAiLlmClient::input_windows(&raw);
+        assert_eq!(ws.len(), 3, "应切成 3 个窗口");
+        assert!(ws.iter().all(|w| w.chars().count() <= MAX_INPUT_CHARS), "每窗口 ≤500 字");
+        assert_eq!(ws.concat(), raw, "拼接后必须与原文逐字一致（不丢内容）");
+    }
+
+    /// 回归：带句末标点的长文在标点处切分（句子完整），且仍全覆盖。
+    #[test]
+    fn input_windows_cut_at_sentence_boundaries_and_cover_all() {
+        // 每句 100 字 + 句号，共 6 句 = 600 字 → 切成多窗口，标点边界切断。
+        let sentence = format!("{}。", "字".repeat(99));
+        let raw = sentence.repeat(6); // 600 字
+        let ws = OpenAiLlmClient::input_windows(&raw);
+        assert!(ws.len() >= 2, "600 字应切成至少 2 个窗口");
+        assert_eq!(ws.concat(), raw, "拼接后必须与原文一致");
+        // 每个窗口都应以句末标点或全文结尾
+        for w in &ws {
+            assert!(
+                w.ends_with('。') || w == ws.last().unwrap(),
+                "窗口应在句末标点处切断（最后一个窗口可为文尾）"
+            );
+        }
+    }
+
+    /// 短暂文本（≤500 字）原样单窗口。
+    #[test]
+    fn input_windows_short_text_single_window() {
+        let raw = "你好，简短的一句话。";
+        let ws = OpenAiLlmClient::input_windows(raw);
+        assert_eq!(ws, vec![raw.to_string()]);
     }
 }

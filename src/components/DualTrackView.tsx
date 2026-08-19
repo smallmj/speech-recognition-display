@@ -65,6 +65,11 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
       // 旧请求的残余 delta（editId 更小）在重试/新请求开始后被拒绝。
       const currentEdit = seg.editId ?? seg.cleaningEditId ?? -1;
       if (evt.editId < currentEdit) return prev;
+      // 长度单调守卫：同一 segment 的整理文本只增不缩。SSE 重试会把当前
+      // 窗口的增量从头再流一遍（editId 不变、partial 回退变短），长度守卫
+      // 抑制这种回退抖动，直到新尝试追上之前的最长文本。
+      const currentLen = seg.cleaningPartial?.length ?? 0;
+      if (evt.partial.length < currentLen) return prev;
       const next = new Map(prev);
       next.set(seg.id, {
         ...seg,
