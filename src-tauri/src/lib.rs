@@ -51,7 +51,7 @@ pub fn run() {
             asr_config::save_asr_config,
             pipeline::start_session,
             pipeline::stop_session,
-            export::export_minutes
+            export::export_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

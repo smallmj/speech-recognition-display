@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import DualTrackView, { useEngineEvents } from "./components/DualTrackView";
+import DualTrackView, { reduceEvents, useEngineEvents } from "./components/DualTrackView";
 import AsrConfigPanel from "./components/AsrConfigPanel";
 import LlmConfigPanel from "./components/LlmConfigPanel";
 import AsrLiveRow from "./components/AsrLiveRow";
 import MinutesPanel from "./components/MinutesPanel";
-import { ENGINE_EVENT, STATUS_EVENT, type EngineEvent, type StatusPayload } from "./engineEvents";
+import {
+  ENGINE_EVENT,
+  STATUS_EVENT,
+  type EngineEvent,
+  type Segment,
+  type StatusPayload,
+} from "./engineEvents";
+import { profileOf, useSpeakerProfiles, type SpeakerProfiles } from "./speakerProfiles";
 import { subscribe } from "./tauriEvent";
 import {
   DisplayContext,
@@ -27,6 +34,34 @@ interface PingPayload {
 
 /** T1 阶段前端确认收到的事件名（与 src-tauri/src/bridge.rs 保持一致）。 */
 const PING_EVENT = "bridge://ping";
+
+/** 导出用时间格式：毫秒时间戳 → HH:MM:SS（本地时区）。 */
+function formatExportTime(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
+ * 把会话片段规约为导出用的 Markdown 字幕记录。
+ *
+ * 每条发言 = 时间 + 说话人 + 文本；文本优先用整理版 `cleaned`（LLM 开启时），
+ * 无整理版（未配置 LLM / 未整理 / 整理失败）时回退原文 `raw`。
+ */
+function buildTranscriptMarkdown(
+  segments: Segment[],
+  profiles: SpeakerProfiles,
+): string {
+  return segments
+    .map((seg) => {
+      const profile = profileOf(profiles, seg.speakerId);
+      const name = profile.name ?? `说话人 ${seg.speakerId}`;
+      const text =
+        seg.cleaned && seg.cleaned.trim().length > 0 ? seg.cleaned.trim() : seg.raw.trim();
+      return `### [${formatExportTime(seg.ts)}] ${name}\n${text}`;
+    })
+    .join("\n\n");
+}
 
 // ---------------------------------------------------------------------------
 // 设置面板（在 Provider 内部渲染，可直接使用 useDisplaySettings）
@@ -183,6 +218,7 @@ function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }
 
 export default function App() {
   const display = useDisplaySettingsState();
+  const { profiles } = useSpeakerProfiles();
 
   const [bridgeReady, setBridgeReady] = useState(false);
   const [engineLive, setEngineLive] = useState(false);
@@ -262,6 +298,16 @@ export default function App() {
     }
     return events.slice(idx);
   }, [events]);
+
+  // T11 导出：把本会话片段规约为 Markdown 字幕记录（整理版优先，无整理版回退原文）。
+  const sessionSegments = useMemo(() => {
+    const map = reduceEvents(sessionEvents);
+    return [...map.values()].sort((a, b) => a.id - b.id);
+  }, [sessionEvents]);
+  const transcript = useMemo(
+    () => buildTranscriptMarkdown(sessionSegments, profiles),
+    [sessionSegments, profiles],
+  );
 
   // 以最近一条会话事件驱动状态机：sessionStarted 重置，sessionStopped 进入
   // 「正在生成纪要」，minutesReady 进入「纪要已生成」。
@@ -382,6 +428,7 @@ export default function App() {
           <AsrLiveRow />
           <MinutesPanel
             minutes={minutes}
+            transcript={transcript}
             generating={sessionStatus === "stopping" || sessionStatus === "generating"}
           />
         </main>

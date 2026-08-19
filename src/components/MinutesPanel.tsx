@@ -19,6 +19,8 @@ import "./MinutesPanel.css";
 export interface MinutesPanelProps {
   /** 最终纪要文本；null 表示尚未生成。 */
   minutes: string | null;
+  /** 本会话的 Markdown 字幕记录（整理版优先，无整理版回退原文）。 */
+  transcript: string;
   /** 是否正在生成纪要（停止后、minutesReady 到达前）。 */
   generating: boolean;
 }
@@ -60,7 +62,7 @@ export function renderMinutes(text: string): ReactNode[] {
   return nodes;
 }
 
-export default function MinutesPanel({ minutes, generating }: MinutesPanelProps) {
+export default function MinutesPanel({ minutes, transcript, generating }: MinutesPanelProps) {
   const [exportStatus, setExportStatus] = useState("");
 
   // 新会话开始（minutes 清空）时，清除上一会话的导出状态。
@@ -72,7 +74,10 @@ export default function MinutesPanel({ minutes, generating }: MinutesPanelProps)
     if (!minutes) return;
     setExportStatus("正在导出…");
     try {
-      const path = await invoke<string>("export_minutes", { minutes });
+      const path = await invoke<string>("export_session", {
+        transcript,
+        minutes,
+      });
       setExportStatus(`已导出：${path}`);
     } catch (e) {
       setExportStatus(`导出失败: ${String(e)}`);
