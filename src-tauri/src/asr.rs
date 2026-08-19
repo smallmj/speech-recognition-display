@@ -25,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use engine::Scd;
 use engine::{AsrPort, Gender, Utterance};
+use tauri::AppHandle;
 
 /// sidecar 状态：0=启动中 1=已启动 2=出错 3=已停止
 const ST_STARTING: u8 = 0;
@@ -59,7 +60,7 @@ pub struct SherpaAsr {
 
 impl SherpaAsr {
     /// 启动 sidecar + 麦克风采集。失败返回错误原因（壳层回退到 mock）。
-    pub fn spawn() -> Result<Self, String> {
+    pub fn spawn(handle: &AppHandle) -> Result<Self, String> {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let model_dir = Self::resolve_model_dir(manifest)?;
         // T5：说话人 speaker embedding 模型（3d-speaker 等）可选；缺失时 SCD 降级为单说话人。
@@ -116,8 +117,18 @@ impl SherpaAsr {
             let last_error = Arc::clone(&last_error);
             let scd = Arc::new(Mutex::new(Scd::default()));
             let scd_embedding = Arc::clone(&scd_embedding);
+            let handle = handle.clone();
             std::thread::spawn(move || {
-                read_stdout(stdout, finals, partials, status, last_error, scd, scd_embedding)
+                read_stdout(
+                    stdout,
+                    finals,
+                    partials,
+                    status,
+                    last_error,
+                    scd,
+                    scd_embedding,
+                    handle,
+                )
             });
         }
 
@@ -301,6 +312,7 @@ fn read_stdout(
     last_error: Arc<Mutex<Option<String>>>,
     scd: Arc<Mutex<Scd>>,
     scd_embedding: Arc<AtomicBool>,
+    handle: AppHandle,
 ) {
     use std::io::{BufRead, BufReader};
     let reader = BufReader::new(stdout);
@@ -322,6 +334,7 @@ fn read_stdout(
                     obj.get("scd_embedding").and_then(|v| v.as_bool()).unwrap_or(false),
                     Ordering::SeqCst,
                 );
+                crate::pipeline::emit_scd_status(&handle, scd_embedding.load(Ordering::SeqCst));
                 println!("[asr] sidecar 已启动: {}", obj.get("model").and_then(|v| v.as_str()).unwrap_or("?"));
             }
             Some("partial") => {

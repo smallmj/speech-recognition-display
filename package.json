@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "check:focus-exit": "node scripts/check-focus-exit.mjs",
     "check:dual-track": "node --experimental-strip-types scripts/check-dual-track-regressions.mjs",
-    "check:llm-nonblocking": "node scripts/check-llm-nonblocking.mjs"
+    "check:llm-nonblocking": "node scripts/check-llm-nonblocking.mjs",
+    "check:scd-embedding": "node scripts/check-scd-embedding.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

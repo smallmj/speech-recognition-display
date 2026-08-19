@@ -99,11 +99,21 @@ fn emit_asr_status(handle: &AppHandle, mode: &str, reason: Option<String>) {
     let _ = handle.emit(STATUS_EVENT, payload);
 }
 
+/// 透出本地 ASR 的说话人分组（SCD）状态：`active` = sidecar 确认加载了 speaker
+/// embedding 模型（按音色分人）；`disabled` = 未配置或加载失败（全部归说话人 1）。
+/// 由 [crate::asr] 的 stdout 读线程在 `started` 事件到达时调用，保证贴近真实。
+pub(crate) fn emit_scd_status(handle: &AppHandle, active: bool) {
+    let _ = handle.emit(
+        STATUS_EVENT,
+        serde_json::json!({ "mode": "sherpa", "scd": if active { "active" } else { "disabled" } }),
+    );
+}
+
 /// 按配置启动 ASR 端口。只负责启动，不承担降级策略。
-fn start_asr(config: &AsrConfig) -> Result<(Box<dyn AsrPort>, AsrMode), String> {
+fn start_asr(handle: &AppHandle, config: &AsrConfig) -> Result<(Box<dyn AsrPort>, AsrMode), String> {
     match config.effective_source() {
         AsrSource::Local => {
-            let real = SherpaAsr::spawn()?;
+            let real = SherpaAsr::spawn(handle)?;
             println!("[engine] 本地 ASR 已启动（sherpa-onnx + 麦克风）");
             if real.scd_configured() {
                 println!(
@@ -151,7 +161,7 @@ fn start_asr_with_fallback(
     config: &AsrConfig,
 ) -> (Box<dyn AsrPort>, AsrMode, AsrSource) {
     let desired = config.effective_source();
-    match start_asr(config) {
+    match start_asr(handle, config) {
         Ok((asr, mode)) => {
             emit_asr_status(handle, mode.status_name(), None);
             (asr, mode, desired)
@@ -162,7 +172,7 @@ fn start_asr_with_fallback(
                     source: AsrSource::Local,
                     ..config.clone()
                 };
-                if let Ok((asr, mode)) = start_asr(&local_config) {
+                if let Ok((asr, mode)) = start_asr(handle, &local_config) {
                     let reason = format!("云端 ASR 启动失败，已回退本地 ASR：{primary_error}");
                     eprintln!("[engine] {reason}");
                     emit_asr_status(handle, mode.status_name(), Some(reason));
