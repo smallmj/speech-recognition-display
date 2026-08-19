@@ -12,16 +12,17 @@
 //!
 //! 时间模型：**逻辑时钟** —— 一切时刻是从管道创建起算的单调 [`Duration`]。
 //! 真实运行由调用方以固定节拍喂 `now`（如每 100ms 一次 `tick`/`step`）；
-//! 测试可任意推进时间而无需 `sleep`。`LlmPort` 通过 trait 注入，本票用
-//! [`MockLlmPort`] 验证管线（T9 再接真实 LLM）。
+//! 测试可任意推进时间而无需 `sleep`。`LlmPort` 通过 trait 注入，同步路径
+//! 用 [`MockLlmPort`] 验证管线；T9 起真实 LLM 由 Tauri 壳走异步路径驱动：
+//! 壳层 `tick(now)` 冻结并派发一个 `pending`，拿 [`CleanupPipeline::pending`]
+//! 调真实 OpenAI 兼容接口（SSE 流式），增量以 `SegmentCleaning` 事件 emit，
+//! 完成后经 [`CleanupPipeline::apply_cleanup_result`]（editId 校验）回填，
+//! 失败经 [`CleanupPipeline::fail_pending`] 置 `Failed` 回退原文。
 //!
 //! # 状态说明
 //!
-//! 本模块当前由引擎单元测试完整验证（见 `mod tests`）；真实消费方（Tauri 壳
-//! 接入、T9 真实 LLM 接入、与 `pipeline::Engine` 的串接）在后续票落地，接入前
-//! 允许「构造未使用」的 `dead_code` 告警，以保持本票只改 `lib.rs` 一行、不动
-//! 并行票（T2 `pipeline.rs`）文件的约束。
-#![allow(dead_code)]
+//! 本模块由引擎单元测试完整验证（见 `mod tests`），并自 T9 起经 `lib.rs` 的
+//! `pub use` 导出，供 Tauri 壳层（`src-tauri/src/pipeline.rs` 整理驱动）消费。
 
 use std::time::Duration;
 
@@ -333,7 +334,14 @@ impl CleanupPipeline {
 
     /// 应用一次外部 LLM 整理结果（异步场景经此回填）。editId 校验由
     /// [`SegmentStore::apply_cleanup`] 执行：只接受严格更大的，否则丢弃。
+    ///
+    /// 与 [Self::fail_pending] 对称：无论结果是否生效，都结束本次在途请求
+    /// （清 `pending` 与单在途标志）——否则异步成功路径会残留在途状态，
+    /// 驱动线程将无限重复处理同一条 pending（T9 遗留缺口，见测试
+    /// `async_apply_cleanup_result_releases_in_flight_and_pending`）。
     pub fn apply_cleanup_result(&mut self, segment_id: u64, cleaned: String, edit_id: u64) -> Vec<EngineEvent> {
+        self.pending.take();
+        self.scheduler.set_in_flight(false);
         if self.store.apply_cleanup(segment_id, cleaned.clone(), edit_id) {
             vec![EngineEvent::SegmentCleaned { segment_id, cleaned, edit_id }]
         } else {
@@ -561,6 +569,31 @@ mod tests {
     }
 
     // ---- 验收：editId 校验 / 乱序 ----
+
+    /// T9 遗留缺口回归：异步成功路径（`apply_cleanup_result`）必须结束本次
+    /// 在途请求（清 pending + 解锁单在途），否则驱动线程无限重复处理同一
+    /// pending（T10 停止排空循环同样依赖此行为）。
+    #[test]
+    fn async_apply_cleanup_result_releases_in_flight_and_pending() {
+        let mut p = mock_pipeline();
+        p.append(secs(0), 1, "异步整理".to_string());
+        assert!(p.tick(secs(3)));
+        assert!(p.has_pending());
+        let (pid, eid) = (p.pending().unwrap().segment_id, p.pending().unwrap().edit_id);
+
+        // 异步成功路径：应用结果 → 产出 SegmentCleaned，且必须清 pending 并解锁单在途
+        let events = p.apply_cleanup_result(pid, "整理完成".into(), eid);
+        assert!(events.iter().any(|e| matches!(e, EngineEvent::SegmentCleaned { segment_id, .. } if *segment_id == pid)));
+        assert!(!p.has_pending(), "成功路径必须清 pending");
+        assert!(!p.scheduler().is_in_flight(), "成功路径必须解锁单在途");
+        assert_eq!(p.store().get(pid).unwrap().status, SegmentStatus::Cleaned);
+
+        // 解锁后可继续派发下一条
+        p.append(secs(3), 1, "第二条".to_string());
+        assert!(p.tick(secs(20)));
+        assert!(p.has_pending());
+        assert_eq!(p.pending().unwrap().segment_id, 1);
+    }
 
     #[test]
     fn edit_id_rejects_stale_results() {

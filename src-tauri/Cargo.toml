@@ -20,3 +20,8 @@ engine = { path = "../engine" }
 # 麦克风采集（macOS 走 CoreAudio）
 cpal = { version = "0.18" }
 rubato = "0.15"
+# 真实 LLM 客户端（T9）：阻塞式 HTTP + SSE 流式读取。features=["json"] 启用
+# send_json；默认 features 含 rustls TLS 与 gzip（https 接口必需）。
+# 锁定 ~2.11：2.11 起设置 header 用 Request::set（2.10 及更早用 header），
+# 锁定已验证的 API 形状。
+ureq = { version = "~2.11", features = ["json"] }

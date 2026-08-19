@@ -98,6 +98,20 @@ pub enum EngineEvent {
         color: String,
         gender: Gender,
     },
+    /// LLM 整理结果的流式增量（SSE 每个 delta），前端据此逐字填充整理版。
+    /// 由壳层在 SSE 过程中 emit（engine 只定义类型与序列化契约，不产生该事件）。
+    ///
+    /// `edit_id` 与同请求的 [`EngineEvent::SegmentCleaned`] 一致（同一流式
+    /// 请求内不变），渲染层据此拒绝乱序到达的残余增量（对齐 ADR-0003
+    /// editId 单调校验：只接受 `editId >= 当前` 的增量）。
+    #[serde(rename_all = "camelCase")]
+    SegmentCleaning {
+        segment_id: u64,
+        /// 本次流式请求预分配的 editId（全局单调，同一请求内不变）。
+        edit_id: u64,
+        /// 截至当前 delta 的累积整理文本（部分结果）。
+        partial: String,
+    },
     #[serde(rename_all = "camelCase")]
     SegmentCleaned {
         segment_id: u64,
@@ -132,6 +146,29 @@ pub trait EmbeddingPort: Send {
 
 /// LLM 端口：整理（去口语化/纠错/补标点）与纪要摘要。
 pub trait LlmPort: Send {
+    /// 同步整理（无流式能力 / mock 的兜底路径）：返回整理结果字符串。
     fn cleanup(&self, text: &str) -> String;
+
+    /// 流式整理：`on_partial` 每次收到**截至当前**的累积整理文本时被调用
+    /// （前端据此逐字填充），成功返回最终整理结果。
+    ///
+    /// 默认实现走 [Self::cleanup] 一次性回调（mock 与同步端口无需覆盖）；
+    /// 真实流式 LLM（SSE）实现覆盖本方法，把每个 delta 累积后回调。
+    /// `on_partial` 用 `&mut dyn FnMut` 而非泛型：保证 trait 对象安全，
+    /// 驱动侧可以 `Box<dyn LlmPort>` 经 trait 调用（单一测试缝可覆盖流式路径）。
+    ///
+    /// 失败返回错误信息字符串（由驱动线程走 `fail_pending` 置 `Failed`
+    /// 回退原文）；`on_partial` 已收到的增量在失败时可忽略（前端最终以
+    /// `SegmentCleaned` / `CleanupFailed` 为准）。
+    fn cleanup_streaming(
+        &self,
+        text: &str,
+        on_partial: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        let cleaned = self.cleanup(text);
+        on_partial(&cleaned);
+        Ok(cleaned)
+    }
+
     fn summarize(&self, chunks: &[String]) -> String;
 }
