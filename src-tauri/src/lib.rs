@@ -22,6 +22,7 @@ mod export;
 mod llm;
 mod pipeline;
 mod sessions;
+mod tray;
 
 use tauri::Manager;
 
@@ -33,6 +34,10 @@ fn ping_ack(payload: String) {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 重复启动：唤起已有主窗口（取消最小化 → 显示 → 聚焦）。
+            tray::show_main_window(app);
+        }))
         .setup(|app| {
             app.manage(pipeline::SessionControl::default());
             bridge::spawn_ping_emitter(app.handle());
@@ -41,7 +46,16 @@ pub fn run() {
             // 流式整理；partial 实时 publish；停止后分批汇总会议纪要。事件流统一经
             // `engine://event` 推给前端。
             pipeline::spawn_engine_emitter(app.handle());
+            // T13：托盘常驻 + 全局热键 + 会话状态镜像（在 SessionControl manage 之后）。
+            tray::setup(app)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 关闭按钮 → 隐藏到托盘（不退出进程），真正退出走托盘菜单「退出」。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             ping_ack,

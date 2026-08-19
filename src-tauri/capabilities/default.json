@@ -6,6 +6,9 @@
   "permissions": [
     "core:default",
     "core:event:default",
-    "core:window:allow-set-always-on-top"
+    "core:window:allow-set-always-on-top",
+    "core:tray:default",
+    "core:app:default",
+    "global-shortcut:default"
   ]
 }
