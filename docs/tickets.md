@@ -10,8 +10,8 @@
 | T2 | [#3](https://github.com/smallmj/speech-recognition-display/issues/3) | 冒烟管线：合成转写 → 气泡流 | T1 | ✅ 已完成 (835ec12) |
 | T3 | [#4](https://github.com/smallmj/speech-recognition-display/issues/4) | 显示定制：主题 + 置顶大字模式 + 文字样式 | T2 | ✅ 已完成 (916ca17) |
 | T4 | [#5](https://github.com/smallmj/speech-recognition-display/issues/5) | 真实麦克风 + 本地流式 ASR（sherpa-onnx） | T2 | ✅ 已完成 (6a51aef) |
-| T5 | [#6](https://github.com/smallmj/speech-recognition-display/issues/6) | 说话人切换检测（SCD） | T4 | 🟢 frontier · ⚠️ PR #16 返工中 |
-| T6 | [#7](https://github.com/smallmj/speech-recognition-display/issues/7) | 手动命名与头像管理 | T5 | 🔴 blocked（等 T5） |
+| T5 | [#6](https://github.com/smallmj/speech-recognition-display/issues/6) | 说话人切换检测（SCD） | T4 | ✅ 已完成 (PR #16) |
+| T6 | [#7](https://github.com/smallmj/speech-recognition-display/issues/7) | 手动命名与头像管理 | T5 | 🟢 frontier · 刚解锁 |
 | T7 | [#8](https://github.com/smallmj/speech-recognition-display/issues/8) | 云端 ASR 可切换 | T4 | 🟢 frontier · 增强项 |
 | T8 | [#9](https://github.com/smallmj/speech-recognition-display/issues/9) | LLM 整理管线（间隔 + 双轨 + 高亮） | T2 | ✅ 已完成 (835ec12) |
 | T9 | [#10](https://github.com/smallmj/speech-recognition-display/issues/10) | 真实 LLM 接入（OpenAI 兼容 + SSE + 重试） | T8 | ✅ 已合并 (PR #15) |
@@ -22,14 +22,13 @@
 
 ## 🟢 Frontier（依赖就绪，可开始）
 
-- **T5**（SCD）— PR #16 返工中（rebase + 修编译 + 音色选性别 stub）
+- **T6**（手动命名与头像管理）— T5 已完成，刚解锁
 - **T7**（云端 ASR）— 增强项，无 PR，可随时开始
 - **T10**（会议纪要）— PR #17 已关闭未合并，可重新开 PR
 - **T13**（托盘+热键）— PR #18 返工中（rebase + 修 9 编译错 + manage/命令 + 停止真停 ASR）
 
 ## 🔴 Blocked（等前置票）
 
-- **T6** — 等 T5
 - **T11** — 等 T10
 - **T12** — 等 T7、T11
 
@@ -38,7 +37,7 @@
 ```
 T1 ✅
 └─ T2 ✅ ─┬─ T3 ✅ ──────────────┐
-          ├─ T4 ✅ ─┬─ T5 🟢 ─ T6 🔴 │
+          ├─ T4 ✅ ─┬─ T5 ✅ ─ T6 🟢 │
           │         └─ T7 🟢       │
           ├─ T8 ✅ ─ T9 ✅ ─ T10 🟢 ─ T11 🔴 ─┐
           └─ T13 🟢                  │

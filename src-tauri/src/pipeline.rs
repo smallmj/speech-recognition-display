@@ -20,6 +20,15 @@
 //! 时基：engine 用逻辑时钟（[std::time::Duration]，自管道创建起算），驱动
 //! 线程每 200ms 一个节拍推进 `now`（统一节拍：partial 刷新及时，整理
 //! 节奏不变——真实 ASR 的防抖/固定节奏由 CleanupPipeline 的调度器决定）。
+//!
+//! T5（SCD）接线：说话人切换检测在 [crate::asr::SherpaAsr] 内部完成 —— stdout 读线程
+//! 在解析每条 final 时（embedding 的唯一来源点）经 [engine::Scd] 决定
+//! speaker_id/gender/is_new_speaker，speaker_id 随 [engine::Utterance] 进入
+//! [engine::CleanupPipeline]（[append_utterance]），`is_new_speaker` 判定用于
+//! `SpeakerAssigned` 事件（有判定用判定，降级路径 None 退回「首次出现即新建」）。
+//! 因此本模块无需持有 SCD 状态；配置了 speaker embedding 模型时
+//! [crate::asr::SherpaAsr::scd_embedding_active] 为真（真实余弦匹配），否则降级
+//! 为单说话人（见 asr.rs 注释）。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -70,6 +79,15 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         let (mut asr, mode): (Box<dyn AsrPort>, AsrMode) = match SherpaAsr::spawn() {
             Ok(real) => {
                 println!("[engine] 真实 ASR 已启动（sherpa-onnx + 麦克风）");
+                // T5 SCD 模式日志：配置层面（spawn 时决定）与生效层面（sidecar 确认）分开报。
+                if real.scd_configured() {
+                    println!(
+                        "[engine] SCD: speaker embedding 模型已配置{}",
+                        if real.scd_embedding_active() { "，sidecar 已确认加载（embedding 余弦匹配生效）" } else { "（等待 sidecar 确认加载…）" }
+                    );
+                } else {
+                    println!("[engine] SCD: 未配置 speaker embedding 模型，降级为单说话人（全部归说话人 1）");
+                }
                 let _ = handle.emit(STATUS_EVENT, serde_json::json!({ "mode": "sherpa" }));
                 let partials = real.partials_handle();
                 (Box::new(real), AsrMode::Sherpa { partials })
@@ -172,6 +190,11 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
 
 /// 把一条转写喂入整理管线：先发说话人归属（颜色/性别，首次出现），
 /// 再发 `SegmentAppended`（对齐 engine 事件顺序）。
+///
+/// T5（SCD）接线：`utt.is_new_speaker` 为 SCD 在 read_stdout 的判定结果
+/// （真实 embedding 路径）——有判定用判定（首个 final 是短发言时 SCD 归入
+/// 说话人 1 且 is_new=false）；无判定（降级单说话人路径，None）退回
+/// 「首次出现即新建」的 T9 既有行为。
 fn append_utterance(
     handle: &AppHandle,
     pipeline: &mut CleanupPipeline,
@@ -188,7 +211,7 @@ fn append_utterance(
                 EngineEvent::SpeakerAssigned {
                     segment_id: segment.id,
                     speaker_id: segment.speaker_id,
-                    is_new_speaker: true,
+                    is_new_speaker: utt.is_new_speaker.unwrap_or(true),
                     color: engine::speaker_color(segment.speaker_id),
                     gender: utt.gender,
                 },

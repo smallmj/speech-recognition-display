@@ -8,7 +8,10 @@
 //!   → finals 缓冲为 Utterance，由 Engine::step 拉取；partials 由壳层轮询后 publish
 //! ```
 //!
-//! T4 阶段无说话人切换检测（SCD 属 T5）：所有 final 暂归说话人 1、性别 Unknown。
+//! T5 起接入说话人切换检测（SCD）：final 事件若携带该段音频的 speaker embedding
+//! （sidecar 配置了 speaker embedding 模型），则经 [engine::Scd] 余弦匹配决定
+//! speaker_id / gender / is_new_speaker；未配置模型时降级为单说话人（全部
+//! speaker_id=1，注释「SCD 降级为单说话人」，见 [read_stdout]）。
 //! 路径解析基于 `CARGO_MANIFEST_DIR`（即 `src-tauri/`），sidecar 与模型在开发期
 //! 存放于该目录下；打包分发方案延后（用户决定先跑通流程）。
 
@@ -16,10 +19,11 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use engine::Scd;
 use engine::{AsrPort, Gender, Utterance};
 
 /// sidecar 状态：0=启动中 1=已启动 2=出错 3=已停止
@@ -31,6 +35,9 @@ const ST_STOPPED: u8 = 3;
 /// 模型目录环境变量覆盖（调试/CI 用）。
 pub const MODEL_DIR_ENV: &str = "SHERPA_MODEL_DIR";
 
+/// 说话人 speaker embedding 模型目录环境变量覆盖（T5 SCD；`asr-models/` 下自动探测兜底）。
+pub const EMBEDDING_MODEL_DIR_ENV: &str = "SHERPA_EMBEDDING_MODEL_DIR";
+
 /// 真实 ASR（sherpa-onnx sidecar）。实现 [AsrPort]。
 pub struct SherpaAsr {
     child: Child,
@@ -40,6 +47,11 @@ pub struct SherpaAsr {
     partials: Arc<Mutex<VecDeque<String>>>,
     status: Arc<AtomicU8>,
     last_error: Arc<Mutex<Option<String>>>,
+    /// sidecar 是否已在 started 事件中确认加载了 speaker embedding 模型
+    /// （真实 embedding 路径；SCD 状态本身由 stdout 读线程独占持有）。
+    scd_embedding: Arc<AtomicBool>,
+    /// spawn 时是否向 sidecar 传了 `--embedding-model-dir`（配置层面是否启用 SCD）。
+    scd_configured: bool,
     /// 麦克风句柄：持有时采集流存活（本身不被读取）。
     #[allow(dead_code)]
     mic: crate::audio::MicCapture,
@@ -50,6 +62,9 @@ impl SherpaAsr {
     pub fn spawn() -> Result<Self, String> {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let model_dir = Self::resolve_model_dir(manifest)?;
+        // T5：说话人 speaker embedding 模型（3d-speaker 等）可选；缺失时 SCD 降级为单说话人。
+        let embedding_dir = Self::resolve_embedding_model_dir(manifest);
+        let scd_configured = embedding_dir.is_some();
         let python = manifest.join(".venv/bin/python3");
         let script = manifest.join("sherpa_streaming.py");
 
@@ -60,12 +75,16 @@ impl SherpaAsr {
             return Err(format!("找不到 sidecar 脚本：{script:?}"));
         }
 
-        let mut child = Command::new(&python)
-            .arg(&script)
+        let mut cmd = Command::new(&python);
+        cmd.arg(&script)
             .arg("--model-dir")
             .arg(&model_dir)
             .arg("--sample-rate")
-            .arg("16000")
+            .arg("16000");
+        if let Some(dir) = &embedding_dir {
+            cmd.arg("--embedding-model-dir").arg(dir);
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -84,21 +103,36 @@ impl SherpaAsr {
         let partials = Arc::new(Mutex::new(VecDeque::new()));
         let status = Arc::new(AtomicU8::new(ST_STARTING));
         let last_error = Arc::new(Mutex::new(None));
+        // T5：SCD 状态由 stdout 读线程独占持有（下方闭包内创建并 move 进线程，
+        // 外部只读 scd_configured / scd_embedding_active，无需 struct 字段）。
+        let scd_embedding = Arc::new(AtomicBool::new(false));
 
-        // -- stdout 读取线程：NDJSON → 队列 --
+        // -- stdout 读取线程：NDJSON → 队列（final 经 SCD 决定 speaker_id） --
         let stdout = child.stdout.take().ok_or("无法取得 sidecar stdout")?;
         {
             let finals = Arc::clone(&finals);
             let partials = Arc::clone(&partials);
             let status = Arc::clone(&status);
             let last_error = Arc::clone(&last_error);
-            std::thread::spawn(move || read_stdout(stdout, finals, partials, status, last_error));
+            let scd = Arc::new(Mutex::new(Scd::default()));
+            let scd_embedding = Arc::clone(&scd_embedding);
+            std::thread::spawn(move || {
+                read_stdout(stdout, finals, partials, status, last_error, scd, scd_embedding)
+            });
         }
 
         // -- 麦克风 → stdin 写线程 --
         let (tx, rx) = mpsc::channel::<Vec<f32>>();
         let (mic, src_rate) = crate::audio::start_mic_capture(tx)?;
         println!("[asr] 麦克风就绪（设备采样率 {src_rate}Hz → 16kHz），模型目录 {}", model_dir.display());
+        println!(
+            "[asr] SCD: {}",
+            if scd_configured {
+                format!("speaker embedding 模式（模型 {}）", embedding_dir.as_ref().unwrap().display())
+            } else {
+                "未配置 speaker embedding 模型，降级为单说话人（全部归说话人 1）".to_string()
+            }
+        );
         std::thread::spawn(move || {
             let mut stdin = stdin;
             for chunk in rx {
@@ -118,6 +152,8 @@ impl SherpaAsr {
             partials,
             status,
             last_error,
+            scd_embedding,
+            scd_configured,
             mic,
         })
     }
@@ -142,6 +178,50 @@ impl SherpaAsr {
             .into_iter()
             .next()
             .ok_or_else(|| format!("未找到 ASR 模型：{root:?} 下没有含 tokens.txt 的模型目录（或用 {MODEL_DIR_ENV} 指定）"))
+    }
+
+    /// 解析说话人 speaker embedding 模型目录（T5 SCD，可选）。
+    ///
+    /// 探测口径：环境变量 [`EMBEDDING_MODEL_DIR_ENV`] 优先；否则在 `asr-models/`
+    /// 下找文件名含 `3dspeaker`/`speaker`/`embedding` 且后缀 `.onnx` 的模型目录
+    /// （sherpa-onnx 生态的 3d-speaker eres2net / wav2vec2 speaker 系列）。
+    /// 找不到返回 `None` —— 不传 `--embedding-model-dir`，sidecar 不加载
+    /// speaker embedding 模型，SCD 降级为单说话人。
+    fn resolve_embedding_model_dir(manifest: &Path) -> Option<PathBuf> {
+        if let Ok(dir) = std::env::var(EMBEDDING_MODEL_DIR_ENV) {
+            let p = PathBuf::from(dir);
+            return if p.is_dir() { Some(p) } else { None };
+        }
+        let root = manifest.join("asr-models");
+        let mut candidates: Vec<PathBuf> = std::fs::read_dir(&root)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        // map_or 降写法（MSRV：is_ok_and 需 ≥1.70，仓库未声明 rust-version）。
+                        p.is_dir() && p.read_dir().map_or(false, |mut it| {
+                            it.any(|f| f.as_ref().map_or(false, |f| {
+                                let name = f.file_name().to_string_lossy().to_lowercase();
+                                name.ends_with(".onnx")
+                                    && (name.contains("3dspeaker") || name.contains("speaker") || name.contains("embedding"))
+                            }))
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        candidates.sort();
+        candidates.into_iter().next()
+    }
+
+    /// 是否向 sidecar 配置了 speaker embedding 模型（spawn 时决定；用于壳层日志）。
+    pub fn scd_configured(&self) -> bool {
+        self.scd_configured
+    }
+
+    /// sidecar 是否已确认加载 speaker embedding 模型（started 事件上报；真实 embedding 路径生效）。
+    pub fn scd_embedding_active(&self) -> bool {
+        self.scd_embedding.load(Ordering::SeqCst)
     }
 
     /// 取走并清空 partial 缓冲（壳层在事件循环中调用）。
@@ -208,12 +288,19 @@ impl Drop for SherpaAsr {
 }
 
 /// stdout 读取线程：逐行解析 NDJSON。
+///
+/// T5：`final` 事件若携带 `embedding` 字段（sidecar 加载了 speaker embedding
+/// 模型），则经 [Scd] 余弦匹配决定 speaker_id / gender / is_new_speaker；
+/// 否则降级为单说话人（speaker_id=1，保持 T4 行为）——注释即契约：未配置
+/// embedding 模型时 SCD 降级，不强行用文本 hash 等伪向量制造假说话人。
 fn read_stdout(
     stdout: std::process::ChildStdout,
     finals: Arc<Mutex<VecDeque<Utterance>>>,
     partials: Arc<Mutex<VecDeque<String>>>,
     status: Arc<AtomicU8>,
     last_error: Arc<Mutex<Option<String>>>,
+    scd: Arc<Mutex<Scd>>,
+    scd_embedding: Arc<AtomicBool>,
 ) {
     use std::io::{BufRead, BufReader};
     let reader = BufReader::new(stdout);
@@ -230,6 +317,11 @@ fn read_stdout(
         match obj.get("type").and_then(|v| v.as_str()) {
             Some("started") => {
                 status.store(ST_STARTED, Ordering::SeqCst);
+                // sidecar 确认是否加载了 speaker embedding 模型（scd_embedding_active() 依据）。
+                scd_embedding.store(
+                    obj.get("scd_embedding").and_then(|v| v.as_bool()).unwrap_or(false),
+                    Ordering::SeqCst,
+                );
                 println!("[asr] sidecar 已启动: {}", obj.get("model").and_then(|v| v.as_str()).unwrap_or("?"));
             }
             Some("partial") => {
@@ -242,13 +334,37 @@ fn read_stdout(
             Some("final") => {
                 if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
                     if !text.is_empty() {
-                        // T4：无 SCD，全部归说话人 1 / 性别 Unknown（T5 接入 SCD 后替换）。
-                        finals.lock().unwrap().push_back(Utterance {
+                        let mut utt = Utterance {
                             speaker_id: 1,
                             gender: Gender::Unknown,
                             text: text.to_string(),
                             ts: 0, // Engine 端无 ts 时由 next_utterance 填充
-                        });
+                            is_new_speaker: None, // 降级路径：由 Engine 按已见说话人推导
+                        };
+                        // 双轨降级：
+                        // a) 真实 embedding —— sidecar 在 final 里附带该段音频的
+                        //    speaker embedding，经 SCD 余弦匹配决定 speaker_id
+                        //    （归入现有/新建）与性别；
+                        // b) 无 embedding —— 保持单说话人（speaker_id=1）。
+                        if let Some(arr) = obj.get("embedding").and_then(|v| v.as_array()) {
+                            // NaN/Inf 防御：任一分量不是有限数字（null/字符串/NaN/Inf）
+                            // → 整段视为无 embedding（走降级路径）。不静默丢弃分量：
+                            // 部分 NaN 会污染点积 → 相似度被误判为 0 → 误新建说话人
+                            // （引擎侧 [engine::Scd::is_empty_signal] 亦含 NaN 检测兜底）。
+                            let emb: Vec<f32> = arr
+                                .iter()
+                                .map(|x| x.as_f64().map(|v| v as f32))
+                                .collect::<Option<Vec<f32>>>()
+                                .unwrap_or_default();
+                            if !emb.is_empty() && emb.iter().all(|v| v.is_finite()) {
+                                let mut scd = scd.lock().unwrap();
+                                let d = scd.process_utterance(&text, &emb, None);
+                                utt.speaker_id = d.speaker_id;
+                                utt.is_new_speaker = Some(d.is_new_speaker);
+                                utt.gender = scd.template_gender(d.speaker_id).unwrap_or(Gender::Unknown);
+                            }
+                        }
+                        finals.lock().unwrap().push_back(utt);
                     }
                 }
             }

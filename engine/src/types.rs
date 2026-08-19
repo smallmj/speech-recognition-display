@@ -71,6 +71,13 @@ pub struct Utterance {
     pub text: String,
     /// 时间戳（毫秒）。
     pub ts: u64,
+    /// SCD 归属时是否新建说话人（T5+）。
+    ///
+    /// `None` = 未提供（mock 脚本/降级路径），由 [crate::pipeline::Engine]
+    /// 按「已见说话人集合」推导；`Some(b)` = 以 SCD 判定结果为准（真实路径）。
+    /// 序列化时省略 `None`，保持既有 JSON 契约不变。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_new_speaker: Option<bool>,
 }
 
 /// engine 对外暴露的统一事件流。
@@ -139,7 +146,7 @@ pub trait AsrPort: Send {
     fn next_utterance(&mut self) -> Option<Utterance>;
 }
 
-/// Embedding 端口：说话人声纹向量计算（用于 SCD 余弦匹配）。
+/// Embedding 端口：说话人 speaker embedding 计算（用于 SCD 余弦匹配）。
 pub trait EmbeddingPort: Send {
     fn compute_embedding(&self, audio: &[f32]) -> Vec<f32>;
 }

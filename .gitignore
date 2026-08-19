@@ -16,3 +16,7 @@ src-tauri/asr-models/
 
 # 系统文件
 .DS_Store
+
+# Python 字节码缓存
+__pycache__/
+*.pyc
