@@ -74,4 +74,6 @@ export const STATUS_EVENT = "engine://status";
 export interface StatusPayload {
   mode: "sherpa" | "cloud" | "mock";
   reason?: string;
+  /** 本地 ASR（sherpa）的说话人分组状态：active = 按音色分人；disabled = 单说话人降级。 */
+  scd?: "active" | "disabled";
 }

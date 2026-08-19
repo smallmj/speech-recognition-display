@@ -188,9 +188,10 @@ class SpeakerEmbedder:
     - `compute(samples)` 对一段 16kHz 音频返回 speaker embedding（list[float]）。
 
     注：sherpa-onnx Python 绑定 API（SpeakerEmbeddingExtractor / create_stream /
-    is_ready / compute / get_result）以本机安装的 sherpa-onnx 版本为准；此处按
-    官方离线 speaker embedding 示例的接口形状编写，全部调用包在 try/except 内，
-    任何 API 差异都只会导致该段降级（不输出 embedding），不会拖垮识别主流程。
+    is_ready / compute）以本机安装的 sherpa-onnx 版本为准：1.13.x 的构造器接收
+    `SpeakerEmbeddingExtractorConfig`，`compute(stream)` 直接返回 embedding 向量
+    （旧版用 `get_result`）；此处做版本兼容，全部调用包在 try/except 内，任何
+    API 差异都只会导致该段降级（不输出 embedding），不会拖垮识别主流程。
     """
 
     def __init__(self, model_dir: str, num_threads: int = 2, sample_rate: int = 16000):
@@ -207,11 +208,20 @@ class SpeakerEmbedder:
             print(f"[sherpa_streaming] speaker embedding 模型目录内无 .onnx，SCD 降级: {p}", file=sys.stderr)
             return
         try:
-            self.extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
-                model=str(onnx),
-                num_threads=num_threads,
-                debug=False,
-            )
+            # 1.13+ 需要显式构造 config 对象；旧版直接传关键字。优先新 API。
+            if hasattr(sherpa_onnx, "SpeakerEmbeddingExtractorConfig"):
+                config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+                    model=str(onnx),
+                    num_threads=num_threads,
+                    debug=False,
+                )
+                self.extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
+            else:
+                self.extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+                    model=str(onnx),
+                    num_threads=num_threads,
+                    debug=False,
+                )
         except Exception as e:  # noqa: BLE001
             print(f"[sherpa_streaming] 加载 speaker embedding 模型失败，SCD 降级: {e}", file=sys.stderr)
             self.extractor = None
@@ -227,9 +237,18 @@ class SpeakerEmbedder:
         try:
             stream = self.extractor.create_stream()
             stream.accept_waveform(self.sample_rate, samples)
+            # 信号输入结束；对 is_ready 触发非必需，但语义正确且无害。
+            if hasattr(stream, "input_finished"):
+                stream.input_finished()
+            emb = None
+            # 1.13+：compute 每次返回 embedding 向量，取最后一次（完整段）。
             while self.extractor.is_ready(stream):
-                self.extractor.compute(stream)
-            emb = self.extractor.get_result(stream)
+                emb = self.extractor.compute(stream)
+            # 旧版兼容：compute 后从 get_result 取向量。
+            if emb is None and hasattr(self.extractor, "get_result"):
+                emb = self.extractor.get_result(stream)
+            if not emb:
+                return None
             return [float(x) for x in emb]
         except Exception as e:  # noqa: BLE001
             print(f"[sherpa_streaming] 提取 embedding 失败，该段降级: {e}", file=sys.stderr)

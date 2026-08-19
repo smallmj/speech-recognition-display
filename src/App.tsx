@@ -76,6 +76,7 @@ export default function App() {
   const [bridgeReady, setBridgeReady] = useState(false);
   const [engineLive, setEngineLive] = useState(false);
   const [asrMode, setAsrMode] = useState<StatusPayload["mode"] | null>(null);
+  const [scdStatus, setScdStatus] = useState<StatusPayload["scd"] | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // T12 整理间隔：启动时从 Rust 常规配置加载，切换后保存并即时生效。
   const [cleanupInterval, setCleanupInterval] = useState<CleanupInterval>(5);
@@ -106,6 +107,7 @@ export default function App() {
     return subscribe(STATUS_EVENT, (payload) => {
       const st = payload as StatusPayload;
       setAsrMode(st.mode);
+      setScdStatus(st.mode === "sherpa" ? (st.scd ?? null) : null);
       if (st.reason) {
         console.warn("[status] ASR 回退原因:", st.reason);
       }
@@ -246,11 +248,16 @@ export default function App() {
             {asrMode === "sherpa"
               ? "本地 ASR（sherpa-onnx）"
               : asrMode === "cloud"
-                ? "云端 ASR（流式）"
+                  ? "云端 ASR（流式）"
                 : asrMode === "mock"
                   ? "演示模式（合成转写）"
                   : "ASR 初始化中…"}
           </span>
+          {asrMode === "sherpa" && scdStatus && (
+            <span className={`badge ${scdStatus === "active" ? "badge-on" : "badge-off"}`}>
+              {scdStatus === "active" ? "按音色分人" : "单说话人降级"}
+            </span>
+          )}
           <span className={`badge ${sessionBadge.cls}`}>{sessionBadge.text}</span>
 
           <div className="app-header-right">
