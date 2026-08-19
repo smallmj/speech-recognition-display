@@ -433,6 +433,11 @@ impl CleanupPipeline {
         &self.store
     }
 
+    /// 冻结全部 `Active` 片段（T10 停止会话时调用，随后进入纪要分批）。
+    pub fn freeze_all_active(&mut self) -> usize {
+        self.store.freeze_all_active()
+    }
+
     pub fn scheduler(&self) -> &CleanupScheduler {
         &self.scheduler
     }
@@ -498,6 +503,22 @@ mod tests {
     }
 
     // ---- 验收 1：片段不可变、只整理已冻结片段、interim 不送 LLM ----
+
+    #[test]
+    fn freeze_all_active_freezes_every_pending_segment() {
+        let mut p = mock_pipeline();
+        p.append(secs(0), 1, "第一句".into());
+        p.append(secs(1), 2, "第二句".into());
+        let frozen = p.freeze_all_active();
+        assert_eq!(frozen, 2, "两条 active 全部冻结");
+        assert!(
+            p.store()
+                .segments()
+                .iter()
+                .all(|s| s.status == SegmentStatus::Frozen),
+            "全部片段应转为 Frozen"
+        );
+    }
 
     #[test]
     fn append_is_immutable_raw_never_changes() {

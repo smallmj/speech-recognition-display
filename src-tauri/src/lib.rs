@@ -21,6 +21,8 @@ mod cloud_asr;
 mod llm;
 mod pipeline;
 
+use tauri::Manager;
+
 /// 前端收到 ping 后的回执命令，用于端到端确认事件桥闭环。
 #[tauri::command]
 fn ping_ack(payload: String) {
@@ -30,10 +32,12 @@ fn ping_ack(payload: String) {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            app.manage(pipeline::SessionControl::default());
             bridge::spawn_ping_emitter(app.handle());
-            // 主事件源（T4 + T9 整合）：真实 ASR（sherpa-onnx + 麦克风）优先，
+            // 主事件源（T4 + T9 + T10 整合）：真实 ASR（sherpa-onnx + 麦克风）优先，
             // 失败回退合成转写演示模式；final 转写 → 整理管线 → 真实 LLM（SSE）
-            // 流式整理；partial 实时 publish。事件流统一经 `engine://event` 推给前端。
+            // 流式整理；partial 实时 publish；停止后分批汇总会议纪要。事件流统一经
+            // `engine://event` 推给前端。
             pipeline::spawn_engine_emitter(app.handle());
             Ok(())
         })
@@ -43,7 +47,9 @@ pub fn run() {
             llm::save_llm_config,
             llm::list_llm_models,
             asr_config::load_asr_config,
-            asr_config::save_asr_config
+            asr_config::save_asr_config,
+            pipeline::start_session,
+            pipeline::stop_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

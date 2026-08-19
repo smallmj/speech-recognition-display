@@ -41,6 +41,12 @@ const CONFIG_FILE: &str = "llm-config.json";
 /// `DEFAULT_PERSONA` 与此保持一致（「恢复内置人设」按钮用），改动需两处同步。
 pub const DEFAULT_PERSONA: &str = "你是实时字幕整理助手：把用户提供的口语化原文整理成通顺的书面语，去口语化、纠正错别字、补充标点，不改变原意，不添加原话没有的信息。直接输出整理结果，不要任何解释或前缀。";
 
+/// 内置纪要人设（系统提示词）：把分批的会议原文汇总为结构化会议纪要。
+///
+/// 对齐规格「纪要编排」：输出结构化纪要（要点/行动项/待办）。同一人设用于
+/// 两个阶段：逐批生成部分纪要（每个时间窗一份），再汇总为最终纪要。
+pub const MINUTES_PERSONA: &str = "你是会议纪要助手：把用户提供的会议原文内容整理成结构化会议纪要。请严格按以下分节输出，每节用【】标题并分条列出：【要点】会议核心结论与关键信息；【行动项】需要执行的具体事项（注明负责人与时间）；【待办】尚未明确或需后续跟进的事项。只输出纪要正文，不要任何解释或前缀。";
+
 /// OpenAI 兼容接口配置（serde camelCase，与前端契约对齐；字段缺省用 [Default]）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -339,12 +345,24 @@ impl OpenAiLlmClient {
         windows
     }
 
-    /// 单次流式请求：POST chat/completions，逐行解析 SSE，回调增量。
+    /// 单次流式请求（整理人设）：POST chat/completions，逐行解析 SSE，回调增量。
     fn stream_once(&self, raw: &str, on_delta: &mut dyn FnMut(&str)) -> Result<String, LlmError> {
+        self.chat_once(self.config.effective_persona(), raw, on_delta)
+    }
+
+    /// 单次 chat 请求：POST chat/completions，逐行解析 SSE，回调增量。
+    /// `persona` 允许整理（[DEFAULT_PERSONA]）与纪要（[MINUTES_PERSONA]）共用同一套
+    /// 传输/解析/重试逻辑（T10 复用 T9 的 SSE 客户端）。
+    fn chat_once(
+        &self,
+        persona: &str,
+        raw: &str,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, LlmError> {
         let body = serde_json::json!({
             "model": self.config.model,
             "messages": [
-                { "role": "system", "content": self.config.effective_persona() },
+                { "role": "system", "content": persona },
                 { "role": "user", "content": raw },
             ],
             "stream": true,
@@ -415,6 +433,61 @@ impl OpenAiLlmClient {
             ));
         }
         Ok(visible)
+    }
+
+    /// 带退避重试地执行一次 chat 请求：失败按等比退避（500ms/1s/2s）重试，
+    /// 最多 [MAX_ATTEMPTS] 次尝试（1 次初始 + 3 次重试）后放弃。
+    fn run_with_retries(
+        &self,
+        mut attempt: impl FnMut(&Self) -> Result<String, LlmError>,
+    ) -> Result<String, LlmError> {
+        let mut last_err: Option<LlmError> = None;
+        for attempt_no in 0..MAX_ATTEMPTS {
+            if attempt_no > 0 {
+                let backoff = BACKOFF_MS[(attempt_no - 1) as usize];
+                println!(
+                    "[llm] 第 {attempt_no} 次重试（{backoff}ms 后，共 {MAX_ATTEMPTS} 次尝试）"
+                );
+                std::thread::sleep(Duration::from_millis(backoff));
+            }
+            match attempt(self) {
+                Ok(text) => return Ok(text),
+                Err(e) => {
+                    println!("[llm] 第 {} 次请求失败: {e}", attempt_no + 1);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| LlmError::Stream("未知错误".to_string())))
+    }
+
+    /// 纪要 prompt：各批文本（或各批部分纪要）按【第 N 段】标记拼接，供
+    /// [MINUTES_PERSONA] 汇总；顺序即时间窗顺序。
+    fn minutes_prompt(chunks: &[String]) -> String {
+        let mut user = String::new();
+        for (i, chunk) in chunks.iter().enumerate() {
+            if i > 0 {
+                user.push('\n');
+            }
+            user.push_str(&format!("【第 {} 段】\n{}", i + 1, chunk));
+        }
+        user
+    }
+
+    /// 生成会议纪要的 Result 形态（T10 壳层用于「失败回退该批原文」兜底）。
+    pub(crate) fn summarize_result(&self, chunks: &[String]) -> Result<String, String> {
+        self.summarize_with_retries(chunks)
+            .map_err(|e| e.to_string())
+    }
+
+    /// 生成会议纪要（带退避重试）：整段返回最终纪要，失败返回错误信息字符串。
+    fn summarize_with_retries(&self, chunks: &[String]) -> Result<String, LlmError> {
+        if chunks.is_empty() {
+            return Ok("（无内容）".to_string());
+        }
+        let user = Self::minutes_prompt(chunks);
+        let mut noop = |_: &str| {};
+        self.run_with_retries(move |client| client.chat_once(MINUTES_PERSONA, &user, &mut noop))
     }
 
     /// 非 SSE 响应兜底：整段 JSON 取 `choices[0].message.content`（或 delta.content）。
@@ -507,9 +580,14 @@ impl engine::LlmPort for OpenAiLlmClient {
         Ok(finished_prefix)
     }
 
-    fn summarize(&self, _chunks: &[String]) -> String {
-        // T10 起接入真实纪要（本文件在 T9 分支暂无调用方）。
-        String::new()
+    fn summarize(&self, chunks: &[String]) -> String {
+        match self.summarize_result(chunks) {
+            Ok(minutes) => minutes,
+            Err(err) => {
+                eprintln!("[llm] 纪要生成失败: {err}");
+                format!("纪要生成失败（重试 3 次后放弃）：{err}")
+            }
+        }
     }
 }
 
@@ -517,6 +595,14 @@ impl engine::LlmPort for OpenAiLlmClient {
 mod tests {
     use super::*;
     use engine::LlmPort;
+
+    /// T10：纪要 prompt 按【第 N 段】标记拼接各批（部分纪要），顺序即时间窗顺序。
+    #[test]
+    fn minutes_prompt_joins_chunks_with_batch_markers() {
+        let prompt = OpenAiLlmClient::minutes_prompt(&["第一批内容".into(), "第二批内容".into()]);
+        assert_eq!(prompt, "【第 1 段】\n第一批内容\n【第 2 段】\n第二批内容");
+        assert_eq!(OpenAiLlmClient::minutes_prompt(&[]), "");
+    }
 
     /// 回归：超 500 字原文必须被完全覆盖（切成多个窗口），绝不静默丢内容。
     /// 修复前的 `clip_input_window` 只返回首个窗口、丢弃其余——违反"不改意/不丢内容"。

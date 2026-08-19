@@ -31,11 +31,15 @@
 //! 为单说话人（见 asr.rs 注释）。
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use engine::{AsrPort, CleanupPipeline, EngineEvent, MockAsrPort, MockLlmPort};
-use tauri::{AppHandle, Emitter};
+use engine::{
+    chunk_for_summarize, AsrPort, CleanupPipeline, EngineEvent, LlmPort, MockAsrPort, MockLlmPort,
+    BATCH_MAX_CHARS,
+};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::asr::SherpaAsr;
 use crate::asr_config::{self, AsrConfig, AsrSource};
@@ -169,6 +173,45 @@ fn start_asr_with_fallback(
     }
 }
 
+/// 会话控制信号：前端 command（[stop_session] / [start_session]）与驱动线程共享。
+///
+/// 两个原子标志即表达会话状态机：
+/// - 识别中：`running=true`（应用启动即自动开始一个会话，对齐 T9 演示行为）；
+/// - 停止中：前端置 `stop_requested`，驱动线程收到后进入停止分支
+///   （不再追加 → 冻结 → 排空整理 → 分批汇总纪要）；
+/// - 已停止待开始：`running=false`，前端「开始识别」置 `start_requested`，
+///   驱动线程重建管线并 emit `SessionStarted`。
+#[derive(Clone)]
+pub struct SessionControl {
+    stop_requested: Arc<AtomicBool>,
+    start_requested: Arc<AtomicBool>,
+}
+
+impl Default for SessionControl {
+    fn default() -> Self {
+        Self {
+            stop_requested: Arc::new(AtomicBool::new(false)),
+            start_requested: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// 前端「停止并生成纪要」命令：通知驱动线程停止追加转写并触发分批汇总。
+#[tauri::command]
+pub fn stop_session(control: State<SessionControl>) -> Result<(), String> {
+    control.stop_requested.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+/// 前端「开始识别」命令：开始（或重新开始）一个会话。停止后再次开始时，
+/// 驱动线程检测到 `start_requested`，重建整理管线（清空上一会话片段与状态）
+/// 并 emit `SessionStarted`，前端据此重置展示与纪要区。
+#[tauri::command]
+pub fn start_session(control: State<SessionControl>) -> Result<(), String> {
+    control.start_requested.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
 /// LLM 异步结果：worker 线程完成后经 mpsc 通道交回主循环回填。
 ///
 /// 主循环绝不能在整理请求期间阻塞——识别（final/partial）优先，LLM 整理
@@ -186,6 +229,7 @@ struct LlmOutcome {
 /// 则交独立线程调真实 LLM（SSE 增量 emit）→ 结果经通道回主循环回填/失败。
 pub fn spawn_engine_emitter(app: &AppHandle) {
     let handle = app.clone();
+    let control = app.state::<SessionControl>().inner().clone();
     std::thread::spawn(move || {
         // 首次延迟稍长，给前端 Vite 加载 + 注册 listen 留出时间。
         std::thread::sleep(Duration::from_millis(1200));
@@ -206,13 +250,18 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         let (llm_result_tx, llm_result_rx) = mpsc::channel::<LlmOutcome>();
         let mut dispatched_edit_id: Option<u64> = None;
 
+        // 会话状态机：应用启动即自动开始一个会话（对齐 T9 演示行为）。
+        let mut running = true;
+        let mut stopping = false;
+        emit(&handle, EngineEvent::SessionStarted);
+
         loop {
             now += TICK_INTERVAL;
             config_poll_ticks += 1;
 
             // 1. ASR 配置轮询：保存后热切换来源。切换前排空旧 final，
             //    pipeline / known_speakers / pending 状态保持不变。
-            if config_poll_ticks >= ASR_CONFIG_POLL_TICKS {
+            if config_poll_ticks >= ASR_CONFIG_POLL_TICKS && running {
                 config_poll_ticks = 0;
                 let next_config = asr_config::read_config(&handle);
                 if next_config != config {
@@ -237,31 +286,53 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 }
             }
 
-            // 1b. 实时 partial（本地/云端 ASR 模式）：publish 最新一条给前端状态行。
-            let partial_mode = match &mode {
-                AsrMode::Local { partials } | AsrMode::Cloud { partials } => Some(partials),
-                AsrMode::Mock => None,
-            };
-            if let Some(partials) = partial_mode {
-                let texts: Vec<String> = partials.lock().unwrap().drain(..).collect();
-                if let Some(last) = texts.into_iter().last() {
-                    emit(&handle, EngineEvent::PartialResult { text: last });
-                }
+            // 2. 会话控制：收到「开始识别」且已停止完成 → 重建管线开新会话；
+            //    收到「停止并生成纪要」→ 停止追加并进入纪要停止流程。
+            if !running && !stopping && control.start_requested.swap(false, Ordering::Relaxed) {
+                // 停止期间 ASR 可能仍积累 final：丢弃，避免旧会话内容混入新会话。
+                discard_asr_inputs(&mut asr, &mode);
+                pipeline = CleanupPipeline::new_with_defaults(Box::new(MockLlmPort));
+                now = Duration::ZERO;
+                known_speakers.clear();
+                dispatched_edit_id = None;
+                running = true;
+                emit(&handle, EngineEvent::SessionStarted);
             }
 
-            // 2. 追加转写：无论整理是否在途，final 都逐条追加（不丢字、不等待）。
-            let is_real_asr = !matches!(mode, AsrMode::Mock);
-            if is_real_asr {
-                // 真实 ASR：final 无条件逐条追加（不丢字、不等待整理完成）。
+            if running && control.stop_requested.swap(false, Ordering::Relaxed) {
+                // 把停止瞬间已在缓冲的 final 全部收进管线，再冻结剩余 active。
                 while let Some(utt) = asr.next_utterance() {
                     append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
                 }
-            } else if let Some(utt) = asr.next_utterance() {
-                // 演示模式：也照常追加，模拟“边说边识别”不因整理而停顿。
-                append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
+                let frozen = pipeline.freeze_all_active();
+                println!("[session] 停止识别：冻结 {frozen} 条剩余片段，进入纪要流程");
+                running = false;
+                stopping = true;
             }
 
-            // 3. 先收 LLM 结果（若已就绪）：回填/失败与下一次派发同拍完成。
+            // 3. 转写输入：
+            //    - 识别中：partial 实时 publish、final 逐条追加（真实/演示一致）；
+            //    - 已停止：丢弃继续到达的 partial/final（停止后不再产生新内容）。
+            if running {
+                let partial_mode = match &mode {
+                    AsrMode::Local { partials } | AsrMode::Cloud { partials } => Some(partials),
+                    AsrMode::Mock => None,
+                };
+                if let Some(partials) = partial_mode {
+                    let texts: Vec<String> = partials.lock().unwrap().drain(..).collect();
+                    if let Some(last) = texts.into_iter().last() {
+                        emit(&handle, EngineEvent::PartialResult { text: last });
+                    }
+                }
+                while let Some(utt) = asr.next_utterance() {
+                    append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
+                }
+            } else {
+                discard_asr_inputs(&mut asr, &mode);
+            }
+
+            // 4. 先收 LLM 结果（若已就绪）：回填/失败与下一次派发同拍完成。
+            //    识别中与停止排空阶段都要处理（停止时在途整理照常回填）。
             while let Ok(outcome) = llm_result_rx.try_recv() {
                 let is_current = pipeline
                     .pending()
@@ -292,54 +363,171 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 }
             }
 
-            // 4. 时钟滴答：防抖/节奏触发 → 冻结 active → 派发一个 pending（单在途）。
-            pipeline.tick(now);
-
-            // 5. 有未派发的 pending → 交独立线程整理，主循环不等待。
-            if let Some(p) = pipeline.pending().cloned() {
-                if dispatched_edit_id == Some(p.edit_id) {
-                    continue; // 已派发过：什么都不做，等结果回来（尾部 sleep 统一执行）。
-                }
-                dispatched_edit_id = Some(p.edit_id);
-                let tx = llm_result_tx.clone();
-                let worker_handle = handle.clone();
-                std::thread::spawn(move || {
-                    // 每次请求前重读配置：配置了有效 API Key 用真实客户端，
-                    // 否则用 MockLlmPort（未配置时整理降级为占位，ASR 不受影响）。
-                    let cfg = llm::read_config(&worker_handle);
-                    let llm_port: Box<dyn engine::LlmPort> = if cfg.api_key.trim().is_empty() {
-                        println!("[llm] 未配置 API Key，整理降级为 mock 占位");
-                        Box::new(MockLlmPort)
+            // 5. 时钟滴答 + 派发 pending：识别中与停止排空阶段都允许整理在途。
+            if running || stopping {
+                pipeline.tick(now);
+                if let Some(p) = pipeline.pending().cloned() {
+                    if dispatched_edit_id == Some(p.edit_id) {
+                        // 已派发过：等结果回来（尾部 sleep 统一执行）。
                     } else {
-                        Box::new(OpenAiLlmClient::new(cfg))
-                    };
-                    println!(
-                        "[llm] speaker {} segments {:?} 送 LLM 整理（{} 字）",
-                        p.speaker_id,
-                        p.segment_ids,
-                        p.raw.chars().count()
-                    );
-                    let result = llm_port.cleanup_streaming(&p.raw, &mut |partial| {
-                        emit(
-                            &worker_handle,
-                            EngineEvent::SegmentCleaning {
-                                segment_id: p.segment_id,
+                        dispatched_edit_id = Some(p.edit_id);
+                        let tx = llm_result_tx.clone();
+                        let worker_handle = handle.clone();
+                        std::thread::spawn(move || {
+                            // 每次请求前重读配置：配置了有效 API Key 用真实客户端，
+                            // 否则用 MockLlmPort（未配置时整理降级为占位，ASR 不受影响）。
+                            let cfg = llm::read_config(&worker_handle);
+                            let llm_port: Box<dyn engine::LlmPort> =
+                                if cfg.api_key.trim().is_empty() {
+                                    println!("[llm] 未配置 API Key，整理降级为 mock 占位");
+                                    Box::new(MockLlmPort)
+                                } else {
+                                    Box::new(OpenAiLlmClient::new(cfg))
+                                };
+                            println!(
+                                "[llm] speaker {} segments {:?} 送 LLM 整理（{} 字）",
+                                p.speaker_id,
+                                p.segment_ids,
+                                p.raw.chars().count()
+                            );
+                            let result = llm_port.cleanup_streaming(&p.raw, &mut |partial| {
+                                emit(
+                                    &worker_handle,
+                                    EngineEvent::SegmentCleaning {
+                                        segment_id: p.segment_id,
+                                        edit_id: p.edit_id,
+                                        partial: partial.to_string(),
+                                    },
+                                );
+                            });
+                            let _ = tx.send(LlmOutcome {
+                                segment_ids: p.segment_ids,
                                 edit_id: p.edit_id,
-                                partial: partial.to_string(),
-                            },
-                        );
-                    });
-                    let _ = tx.send(LlmOutcome {
-                        segment_ids: p.segment_ids,
-                        edit_id: p.edit_id,
-                        result,
-                    });
-                });
+                                result,
+                            });
+                        });
+                    }
+                }
+            }
+
+            // 6. 停止排空完成（无 pending / 在途 / 未整理片段）→ 分批汇总纪要。
+            if stopping && pipeline_idle(&pipeline) {
+                stopping = false;
+                run_minutes(&handle, &pipeline);
             }
 
             std::thread::sleep(TICK_INTERVAL);
         }
     });
+}
+
+/// 丢弃停止后 ASR 继续缓冲的 partial / final（新会话开始前或停止排空期间）。
+fn discard_asr_inputs(asr: &mut Box<dyn AsrPort>, mode: &AsrMode) {
+    while asr.next_utterance().is_some() {}
+    match mode {
+        AsrMode::Local { partials } | AsrMode::Cloud { partials } => {
+            partials.lock().unwrap().clear();
+        }
+        AsrMode::Mock => {}
+    }
+}
+
+/// 整理管线是否已全部消化：无在途、无 pending、无未整理/未冻结片段。
+fn pipeline_idle(pipeline: &CleanupPipeline) -> bool {
+    !pipeline.has_pending()
+        && !pipeline.scheduler().is_in_flight()
+        && pipeline.store().get_frozen_uncleaned().is_empty()
+        && pipeline
+            .store()
+            .segments()
+            .iter()
+            .all(|s| s.status != engine::SegmentStatus::Active)
+}
+
+/// 纪要阶段使用的 LLM 端口（Result 形态）：真实客户端失败可回退该批原文，
+/// Mock 始终成功（确定性输出）。
+enum MinutesLlm {
+    Mock(MockLlmPort),
+    OpenAi(OpenAiLlmClient),
+}
+
+impl MinutesLlm {
+    fn summarize(&self, chunks: &[String]) -> Result<String, String> {
+        match self {
+            Self::Mock(mock) => Ok(mock.summarize(chunks)),
+            Self::OpenAi(client) => client.summarize_result(chunks),
+        }
+    }
+}
+
+/// 构造当前生效的纪要 LLM：配置了有效 API Key → 真实 OpenAI 兼容客户端；
+/// 未配置 → 降级 Mock（纪要仍能输出结构化占位，ASR 不受影响）。
+fn current_minutes_llm(handle: &AppHandle) -> MinutesLlm {
+    let cfg = llm::read_config(handle);
+    if cfg.api_key.trim().is_empty() {
+        println!("[llm] 未配置 API Key，纪要降级为 mock 占位（ASR 不受影响）");
+        MinutesLlm::Mock(MockLlmPort)
+    } else {
+        MinutesLlm::OpenAi(OpenAiLlmClient::new(cfg))
+    }
+}
+
+/// 停止流程（T10）：emit `SessionStopped` → engine 分批（每批 ≤500 字 + 滚动
+/// 上文）→ 逐批真实 LLM 生成部分纪要 → ≥2 批时再汇总为最终结构化纪要
+/// （要点/行动项/待办）→ emit `MinutesReady`。
+///
+/// 分批算法与 engine 的 [engine::minutes] 纯函数同构；纪要最终结果整段返回
+/// （不流式展示）。单批失败时回退该批原文、汇总失败时拼接各批部分纪要，
+/// 尽力不丢内容。
+fn run_minutes(handle: &AppHandle, pipeline: &CleanupPipeline) {
+    emit(handle, EngineEvent::SessionStopped);
+    let segments: Vec<engine::Segment> = pipeline.store().segments().to_vec();
+    let batches = chunk_for_summarize(&segments, BATCH_MAX_CHARS);
+    if batches.is_empty() {
+        emit(
+            handle,
+            EngineEvent::MinutesReady {
+                minutes: "（本次会话无内容，未生成纪要）".to_string(),
+            },
+        );
+        return;
+    }
+
+    let llm_port = current_minutes_llm(handle);
+    let mut partials: Vec<String> = Vec::new();
+    for (i, batch) in batches.iter().enumerate() {
+        let batch_text = batch.join("\n");
+        println!(
+            "[minutes] 第 {} 批送 LLM 生成纪要（{} 字）",
+            i + 1,
+            batch_text.chars().count()
+        );
+        match llm_port.summarize(&[batch_text.clone()]) {
+            Ok(partial) => partials.push(partial),
+            Err(err) => {
+                // 单批失败（重试 3 次后）：回退该批原文，尽力不丢内容。
+                println!("[minutes] 第 {} 批纪要失败（回退该批原文）: {err}", i + 1);
+                partials.push(batch_text);
+            }
+        }
+    }
+
+    let minutes = if partials.len() > 1 {
+        match llm_port.summarize(&partials) {
+            Ok(merged) => merged,
+            Err(err) => {
+                // 汇总失败：拼接各批部分纪要兜底（仍保留结构化分节）。
+                println!("[minutes] 汇总失败（拼接各批部分纪要）: {err}");
+                partials.join("\n\n")
+            }
+        }
+    } else {
+        partials
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "（无内容）".to_string())
+    };
+    emit(handle, EngineEvent::MinutesReady { minutes });
 }
 
 /// 把一条转写喂入整理管线：先发说话人归属（颜色/性别，首次出现），
@@ -418,6 +606,21 @@ mod tests {
             AsrSource::Local,
             AsrSource::Cloud
         ));
+    }
+
+    #[test]
+    fn pipeline_idle_tracks_pending_and_frozen_work() {
+        let mut p = CleanupPipeline::new_with_defaults(Box::new(MockLlmPort));
+        assert!(pipeline_idle(&p), "空管线即 idle");
+
+        p.append(Duration::ZERO, 1, "一句话".to_string());
+        assert!(!pipeline_idle(&p), "有 active 片段未冻结 → 不 idle");
+
+        p.freeze_all_active();
+        assert!(!pipeline_idle(&p), "已冻结但未整理 → 不 idle");
+
+        p.step(Duration::from_secs(3));
+        assert!(pipeline_idle(&p), "整理完成后应回到 idle");
     }
 
     #[test]

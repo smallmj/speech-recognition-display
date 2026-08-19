@@ -683,3 +683,38 @@ body {
 .settings-toggle.on .settings-toggle-knob {
   transform: translateX(18px);
 }
+
+.session-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.session-btn {
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.session-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.session-btn.is-start {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.session-btn.is-stop {
+  border-color: rgba(255, 59, 48, 0.5);
+  background: rgba(255, 59, 48, 0.08);
+  color: #d43a30;
+}

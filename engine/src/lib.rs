@@ -21,11 +21,15 @@
 //! 颜色稳定复用 [crate::pipeline::speaker_color]。
 
 mod cleanup;
+mod minutes;
 mod pipeline;
 mod scd;
 mod types;
 
 pub use cleanup::{CleanupPipeline, CleanupScheduler, MockLlmPort, PendingCleanup, SegmentStore};
+pub use minutes::{
+    chunk_for_summarize, summarize_minutes, BATCH_MAX_CHARS, MAX_TOKENS, ROLLING_CONTEXT_CHARS,
+};
 pub use pipeline::{speaker_color, Engine, MockAsrPort, SPEAKER_PALETTE};
 pub use scd::{cosine_similarity, Scd, ScdConfig, SpeakerDecision, SpeakerTemplate};
 pub use types::{
@@ -90,6 +94,20 @@ mod tests {
         assert!(json.contains("\"partial\":\"你好，我想\""), "got: {json}");
 
         // 反序列化往返保持相等（前端桥接的 JSON 契约）
+        let back: EngineEvent = serde_json::from_str(&json).expect("deserialize event");
+        assert_eq!(evt, back);
+    }
+
+    /// T10 事件契约：会议纪要就绪事件的序列化 shape（前端据此展示纪要）。
+    #[test]
+    fn minutes_ready_event_serializes_with_type_tag_and_camel_case() {
+        let evt = EngineEvent::MinutesReady {
+            minutes: "【要点】…\n【行动项】…".into(),
+        };
+        let json = serde_json::to_string(&evt).expect("serialize event");
+        assert!(json.contains("\"type\":\"minutesReady\""), "got: {json}");
+        assert!(json.contains("\"minutes\":"), "got: {json}");
+
         let back: EngineEvent = serde_json::from_str(&json).expect("deserialize event");
         assert_eq!(evt, back);
     }
