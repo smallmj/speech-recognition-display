@@ -14,6 +14,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# T13 托盘/热键/单实例插件（Tauri 2 v2 线）
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 engine = { path = "../engine" }
