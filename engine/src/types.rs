@@ -146,7 +146,7 @@ pub trait AsrPort: Send {
     fn next_utterance(&mut self) -> Option<Utterance>;
 }
 
-/// Embedding 端口：说话人声纹向量计算（用于 SCD 余弦匹配）。
+/// Embedding 端口：说话人 speaker embedding 计算（用于 SCD 余弦匹配）。
 pub trait EmbeddingPort: Send {
     fn compute_embedding(&self, audio: &[f32]) -> Vec<f32>;
 }

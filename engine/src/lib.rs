@@ -16,8 +16,9 @@
 //! 校验 + 失败回退），并把 [crate::cleanup::CleanupPipeline] 等导出，供 Tauri
 //! 壳层经「`tick` 派发 pending → 调真实 LLM → `apply_cleanup_result` / 
 //! `fail_pending` 回填」的异步路径驱动（T9 真实 LLM 接入）。
-//! T5 新增 [crate::scd]：说话人切换检测 —— 声纹向量余弦匹配 + 自动编号 +
-//! 音色选性别（MVP 降级 Unknown）。颜色稳定复用 [crate::pipeline::speaker_color]。
+//! T5 新增 [crate::scd]：说话人切换检测 —— speaker embedding 余弦匹配 + 自动编号 +
+//! 音色选性别（T5 决策：降级 Unknown，见 [T5 实现总结](docs/T5-implementation-summary.md)）。
+//! 颜色稳定复用 [crate::pipeline::speaker_color]。
 
 mod cleanup;
 mod pipeline;

@@ -22,10 +22,11 @@
 //! 节奏不变——真实 ASR 的防抖/固定节奏由 CleanupPipeline 的调度器决定）。
 //!
 //! T5（SCD）接线：说话人切换检测在 [crate::asr::SherpaAsr] 内部完成 —— stdout 读线程
-//! 在解析每条 final 时（embedding 的唯一来源点）经 [engine::scd::Scd] 决定
+//! 在解析每条 final 时（embedding 的唯一来源点）经 [engine::Scd] 决定
 //! speaker_id/gender/is_new_speaker，再以 [engine::Utterance] 进入 [engine::Engine]。
-//! 因此本模块无需持有 SCD 状态；配置了声纹模型时 [crate::asr::SherpaAsr::scd_embedding_active]
-//! 为真（真实余弦匹配），否则降级为单说话人（见 asr.rs 注释）。
+//! 因此本模块无需持有 SCD 状态；配置了 speaker embedding 模型时
+//! [crate::asr::SherpaAsr::scd_embedding_active] 为真（真实余弦匹配），否则降级
+//! 为单说话人（见 asr.rs 注释）。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -79,11 +80,11 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 // T5 SCD 模式日志：配置层面（spawn 时决定）与生效层面（sidecar 确认）分开报。
                 if real.scd_configured() {
                     println!(
-                        "[engine] SCD: 声纹模型已配置{}",
+                        "[engine] SCD: speaker embedding 模型已配置{}",
                         if real.scd_embedding_active() { "，sidecar 已确认加载（embedding 余弦匹配生效）" } else { "（等待 sidecar 确认加载…）" }
                     );
                 } else {
-                    println!("[engine] SCD: 未配置声纹模型，降级为单说话人（全部归说话人 1）");
+                    println!("[engine] SCD: 未配置 speaker embedding 模型，降级为单说话人（全部归说话人 1）");
                 }
                 let _ = handle.emit(STATUS_EVENT, serde_json::json!({ "mode": "sherpa" }));
                 let partials = real.partials_handle();

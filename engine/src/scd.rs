@@ -1,8 +1,10 @@
-//! SCD（说话人切换检测）：声纹向量余弦匹配 + 自动编号 + 音色选性别。
+//! SCD（说话人切换检测）：speaker embedding 余弦匹配 + 自动编号 + 音色选性别。
 //!
 //! 对齐 [ADR-0002](docs/adr/0002-local-streaming-asr-and-self-built-scd.md)：
 //! 不做全自动在线 diarization（延迟 + 标签漂移），采用「VAD 切句 + speaker
 //! embedding 余弦匹配」自拼方案；系统**只能分组、不能自动认人**（手动命名属 T6）。
+//! 术语对齐 ADR-0002（及 CONTEXT.md 的 Avoid「声纹识别」）：说话人向量一律称
+//! speaker embedding，不叫「声纹」。
 //!
 //! 职责分工：
 //! - **VAD 切句**由 sidecar 的端点检测承担（`maybe_finalize`，见
@@ -14,18 +16,20 @@
 //! - **[`Scd::update_template`]**：把新向量并入模板（移动平均），增强鲁棒性。
 //!   长会话颜色稳定依赖 **speaker_id 稳定**（[`crate::pipeline::speaker_color`]
 //!   按 id 取模映射），而非模板向量精确 —— 只要同一人 id 不变，颜色就不跳变。
-//! - **[`Scd::infer_gender`]**：音色选性别。T5 阶段无真实性别分类模型，
-//!   MVP 降级为返回 [`Gender::Unknown`]（真实实现需 f0/性别分类模型，
-//!   T6 可由用户手动指定性别覆盖）。
+//! - **[`Scd::infer_gender`]**：音色选性别。T5 明确决策为**降级 Unknown**
+//!   （见 [T5 实现总结](docs/T5-implementation-summary.md) 验收④）：MVP 阶段
+//!   无真实性别分类模型，基于 embedding 维度/基频的简单启发精度不可靠
+//!   （实测噪声大，误判反而破坏头像一致性），故不实现低精度推断；
+//!   有 `gender_hint`（sidecar 上报或 T6 用户手动指定）时以之为准。
 
 use crate::types::Gender;
 
-/// 一条已注册的说话人模板（声纹 + 性别）。
+/// 一条已注册的说话人模板（speaker embedding + 性别）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpeakerTemplate {
     /// 说话人 id（自动编号，1 起）。
     pub id: u32,
-    /// 声纹向量（归一化后做余弦匹配）。随 [Scd::update_template] 移动平均更新。
+    /// speaker embedding（说话人向量，归一化后做余弦匹配）。随 [Scd::update_template] 移动平均更新。
     pub embedding: Vec<f32>,
     /// 说话人性别（音色推断结果，用于前端头像选择）。
     pub gender: Gender,
@@ -38,11 +42,12 @@ pub struct SpeakerTemplate {
 pub struct ScdConfig {
     /// 余弦相似度阈值：最高相似度 **≥ 阈值** → 归入现有说话人；< 阈值 → 新建。
     /// 默认 0.75（对齐 ADR「超过阈值归入现有说话人，否则新建」的口径）。
-    /// 真实声纹模型（如 3d-speaker eres2net）输出为归一化向量，0.75 是常用经验值；
-    /// 阈值越大分组越严（易新建），越小越易误合并（T12 设置系统再做 UI 调节）。
+    /// 真实 speaker embedding 模型（如 3d-speaker eres2net）输出为归一化向量，
+    /// 0.75 是常用经验值；阈值越大分组越严（易新建），越小越易误合并
+    /// （T12 设置系统再做 UI 调节）。
     pub cosine_threshold: f32,
     /// 视为有效发言的最小字符数：短于它的 final（语气词/噪声，如「嗯」「哦」）
-    /// 不参与新建说话人判定 —— 声纹质量不可靠，避免噪声制造出假说话人。
+    /// 不参与新建说话人判定 —— embedding 质量不可靠，避免噪声制造出假说话人。
     pub min_speech_chars: usize,
 }
 
@@ -75,7 +80,7 @@ pub struct Scd {
     templates: Vec<SpeakerTemplate>,
     /// 下一个可分配的新说话人 id（自动编号：1/2/3 …）。
     next_speaker_id: u32,
-    /// 最近一次归属的说话人（短发言/无声纹时沿用，避免噪声新建）。
+    /// 最近一次归属的说话人（短发言/无 speaker embedding 时沿用，避免噪声新建）。
     last_speaker_id: Option<u32>,
 }
 
@@ -122,7 +127,7 @@ impl Scd {
 
     /// 文本是否算「有效发言」（长度 ≥ `min_speech_chars`）。
     ///
-    /// 短于阈值的 final（语气词/咳嗽声等）声纹不可靠，不做新建判定。
+    /// 短于阈值的 final（语气词/咳嗽声等）embedding 不可靠，不做新建判定。
     pub fn is_meaningful_speech(&self, text: &str) -> bool {
         text.chars().count() >= self.config.min_speech_chars
     }
@@ -149,8 +154,8 @@ impl Scd {
     /// 判定一条 final 的说话人归属（不并入模板）。
     ///
     /// - 有效发言：走余弦匹配（[`Self::assign_speaker`]）；
-    /// - 过短发言或无声纹（空/全零向量）：沿用最近说话人（首个过短句归
-    ///   说话人 1），**绝不新建** —— 噪声保护。
+    /// - 过短发言或无 speaker embedding（空/全零/含 NaN 向量）：沿用最近说话人
+    ///   （首个过短句归说话人 1），**绝不新建** —— 噪声保护。
     pub fn assign_for_utterance(
         &mut self,
         text: &str,
@@ -158,11 +163,7 @@ impl Scd {
         gender_hint: Option<Gender>,
     ) -> SpeakerDecision {
         if !self.is_meaningful_speech(text) || Self::is_empty_signal(embedding) {
-            let id = self.last_speaker_id.unwrap_or(1);
-            return SpeakerDecision {
-                speaker_id: id,
-                is_new_speaker: false,
-            };
+            return self.resolve_no_embedding();
         }
         self.assign_speaker(embedding, gender_hint)
     }
@@ -171,22 +172,19 @@ impl Scd {
     /// **≥ 阈值 → 归入该说话人**（`is_new_speaker = false`）；
     /// **< 阈值 → 新建说话人**（id = 当前最大 + 1，`is_new_speaker = true`）。
     ///
-    /// 空/全零向量视为「无声纹信号」，沿用最近说话人（由调用方
-    /// [`Self::assign_for_utterance`] 拦截；直接调用本方法时也做同样兜底）。
+    /// 空/全零/含 NaN 向量视为「无 speaker embedding 信号」，沿用最近说话人
+    /// （由调用方 [`Self::assign_for_utterance`] 拦截；直接调用本方法时也做
+    /// 同样兜底）。
     pub fn assign_speaker(&mut self, embedding: &[f32], gender_hint: Option<Gender>) -> SpeakerDecision {
         if Self::is_empty_signal(embedding) {
-            let id = self.last_speaker_id.unwrap_or(1);
-            return SpeakerDecision {
-                speaker_id: id,
-                is_new_speaker: false,
-            };
+            return self.resolve_no_embedding();
         }
 
         // 匹配所有已注册模板，取最高相似度（平手取先注册者）。
         let mut best: Option<(f32, u32)> = None;
         for t in &self.templates {
             let sim = cosine_similarity(embedding, &t.embedding);
-            if best.is_none_or(|(s, _)| sim > s) {
+            if best.map_or(true, |(s, _)| sim > s) {
                 best = Some((sim, t.id));
             }
         }
@@ -251,19 +249,35 @@ impl Scd {
         t.update_count = new_count;
     }
 
-    /// 音色选性别：根据声纹向量推断说话人性别。
+    /// 音色选性别：根据 speaker embedding 推断说话人性别。
     ///
-    /// **T5 MVP 降级**：无性别分类模型时返回 [`Gender::Unknown`]。真实实现需
-    /// 音色性别分类模型（如基于基频 f0 / 专用性别分类 embedding 的判别器），
-    /// 接入点已预留 —— 有模型时在此实现，或由 Tauri 壳把 sidecar 的性别结果
-    /// 作为 `gender_hint` 传入（优先级高于本函数）。T6 允许用户手动指定性别。
+    /// **T5 明确决策：降级返回 [`Gender::Unknown`]**（非临时 stub，见模块注释
+    /// 与 [T5 实现总结](docs/T5-implementation-summary.md) 验收④）——MVP 阶段无
+    /// 真实性别分类模型，基于 embedding 维度/基频的简单启发精度不可靠，强行
+    /// 实现低精度推断反而破坏头像一致性。`gender_hint`（sidecar 上报 / T6 用户
+    /// 手动指定）优先于本函数；有真实 f0/性别分类模型时在此实现。
     pub fn infer_gender(&self, _embedding: &[f32]) -> Gender {
         Gender::Unknown
     }
 
-    /// embedding 是否为「无声纹信号」：空向量或全零向量（无方向可比）。
+    /// 「无 speaker embedding 信号」的兜底：沿用最近说话人（首个归说话人 1），
+    /// **绝不新建** —— 噪声保护。`assign_for_utterance`（过短发言/空信号）与
+    /// `assign_speaker`（空信号直入）共用此判定，避免重复实现。
+    fn resolve_no_embedding(&self) -> SpeakerDecision {
+        let id = self.last_speaker_id.unwrap_or(1);
+        SpeakerDecision {
+            speaker_id: id,
+            is_new_speaker: false,
+        }
+    }
+
+    /// embedding 是否为「无 speaker embedding 信号」：空向量、全零向量，或
+    /// **任一分量为 NaN**（sidecar 解析异常时的防御——NaN 会污染点积使相似度
+    /// 不可信，视为空信号沿用最近说话人，而非误判相似度 0 → 制造假说话人）。
     fn is_empty_signal(embedding: &[f32]) -> bool {
-        embedding.is_empty() || embedding.iter().all(|x| *x == 0.0)
+        embedding.is_empty()
+            || embedding.iter().any(|x| x.is_nan())
+            || embedding.iter().all(|x| *x == 0.0)
     }
 }
 
@@ -272,6 +286,8 @@ impl Scd {
 /// 稳健口径（注释即契约）：
 /// - 维度不一致 → 返回 0（无法比较，不 panic）；
 /// - 任一侧为零向量（模长为 0）→ 返回 0（无方向可比）；
+/// - 任一侧含 NaN/Inf → 返回 0（无方向可比，防御解析异常的 embedding，
+///   避免 NaN 相似度被当作 0 而误新建说话人）；
 /// - 内部用 f64 累加，减少 float32 累积误差后截断回 f32。
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
@@ -287,7 +303,9 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         na += x * x;
         nb += y * y;
     }
-    if na == 0.0 || nb == 0.0 {
+    // 模长需为正有限值、点积需有限：NaN/±Inf/零模长都无方向可比 → 0
+    // （`!(na > 0.0)` 覆盖零与 NaN；is_finite 覆盖 ±Inf）。
+    if !(na > 0.0) || !(nb > 0.0) || !na.is_finite() || !nb.is_finite() || !dot.is_finite() {
         return 0.0;
     }
     (dot / (na.sqrt() * nb.sqrt())) as f32
@@ -422,7 +440,7 @@ mod tests {
         }
     }
 
-    // ---- 验收：短发言/无声纹不新建（VAD 切句后的噪声保护）----
+    // ---- 验收：短发言/无 speaker embedding 不新建（VAD 切句后的噪声保护）----
 
     #[test]
     fn short_speech_does_not_create_speaker() {
@@ -448,12 +466,39 @@ mod tests {
     fn empty_or_zero_embedding_reuses_last_speaker() {
         let mut scd = Scd::new(config(0.75));
         scd.assign_speaker(&emb_a(), None);
-        // 无声纹信号（空向量 / 全零向量）：不新建，沿用最近说话人
-        let d = scd.assign_for_utterance("没有声纹的一段话", &[], None);
+        // 无 speaker embedding 信号（空向量 / 全零向量）：不新建，沿用最近说话人
+        let d = scd.assign_for_utterance("没有向量的一段话", &[], None);
         assert_eq!((d.speaker_id, d.is_new_speaker), (1, false));
         let d2 = scd.assign_speaker(&[0.0, 0.0, 0.0], None);
         assert_eq!((d2.speaker_id, d2.is_new_speaker), (1, false));
         assert_eq!(scd.speaker_count(), 1);
+    }
+
+    // ---- 验收：NaN embedding 视为空信号（解析异常防御，不误新建）----
+
+    #[test]
+    fn cosine_similarity_nan_or_inf_returns_zero() {
+        // 含 NaN 的向量：无方向可比 → 0（而非 NaN 传播污染模板）
+        assert_eq!(cosine_similarity(&[f32::NAN, 0.0], &[1.0, 0.0]), 0.0);
+        assert_eq!(cosine_similarity(&[1.0, 0.0], &[f32::NAN, 0.0]), 0.0);
+        // 含 ±Inf 的向量：同样无方向可比 → 0
+        assert_eq!(cosine_similarity(&[f32::INFINITY, 0.0], &[1.0, 0.0]), 0.0);
+        assert_eq!(cosine_similarity(&[1.0, 0.0], &[f32::NEG_INFINITY, 0.0]), 0.0);
+        // 全 NaN 一侧 → 0
+        assert_eq!(cosine_similarity(&[f32::NAN], &[f32::NAN]), 0.0);
+    }
+
+    #[test]
+    fn nan_embedding_reuses_last_speaker() {
+        let mut scd = Scd::new(config(0.75));
+        scd.assign_speaker(&emb_a(), None);
+        // 含 NaN 的 embedding（如 sidecar 解析异常）：视为空信号 → 沿用最近说话人，
+        // 绝不新建（否则相似度被误判为 0 → 制造假说话人）。
+        let d = scd.assign_for_utterance("带 NaN 的一段话", &[f32::NAN, f32::NAN, f32::NAN], None);
+        assert_eq!((d.speaker_id, d.is_new_speaker), (1, false));
+        let d2 = scd.assign_speaker(&[1.0, f32::NAN, 0.0], None);
+        assert_eq!((d2.speaker_id, d2.is_new_speaker), (1, false));
+        assert_eq!(scd.speaker_count(), 1, "NaN embedding 不产生模板，也不污染匹配");
     }
 
     // ---- 验收：模板更新后匹配仍稳定（不跳变）----
@@ -504,7 +549,7 @@ mod tests {
         assert_eq!(speaker_color(9), speaker_color(1), "越界 id 取模回绕但仍稳定");
     }
 
-    // ---- 验收：音色选性别（MVP 降级为 Unknown；gender_hint 优先）----
+    // ---- 验收：音色选性别（T5 决策：降级为 Unknown；gender_hint 优先）----
 
     #[test]
     fn gender_hint_sets_template_gender() {
@@ -512,7 +557,7 @@ mod tests {
         let d = scd.assign_speaker(&emb_a(), Some(Gender::Female));
         assert!(d.is_new_speaker);
         assert_eq!(scd.template_gender(d.speaker_id), Some(Gender::Female));
-        // 无 hint 且无性别模型 → Unknown（MVP 降级）
+        // 无 hint 且无性别模型 → Unknown（T5 明确决策的降级，见模块注释）
         let mut scd2 = Scd::new(config(0.75));
         let d2 = scd2.assign_speaker(&emb_b(), None);
         assert_eq!(scd2.template_gender(d2.speaker_id), Some(Gender::Unknown));
@@ -524,7 +569,7 @@ mod tests {
         assert_eq!(
             scd.infer_gender(&emb_a()),
             Gender::Unknown,
-            "无性别分类模型 → Unknown（T5 MVP 降级，真实实现需 f0/性别模型）"
+            "T5 决策：无性别分类模型 → Unknown（明确降级并文档化，真实实现需 f0/性别模型，T6 手动指定）"
         );
     }
 
