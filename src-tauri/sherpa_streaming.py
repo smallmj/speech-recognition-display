@@ -10,9 +10,13 @@ sherpa_streaming.py — sherpa-onnx 流式 ASR sidecar。
     stdin EOF  : 触发优雅关闭（flush 当前 final 结果后退出）
 
   Python → Rust (stdout)  每行一条 NDJSON：
-    {"type":"started","streaming":true,"model":"...","sample_rate":16000}
+    {"type":"started","streaming":true,"model":"...","sample_rate":16000,
+     "scd_embedding":true|false}                     是否加载了说话人声纹模型
     {"type":"partial","text":"..."}   识别中间结果（边说边出）
-    {"type":"final","text":"..."}     一句话定稿（端点/静音触发）
+    {"type":"final","text":"...",
+     "embedding":[...]}               一句话定稿（端点/静音触发）；
+                                     embedding 字段仅当配置了声纹模型时出现
+                                     （T5 SCD：该段音频的说话人声纹向量，Rust 端余弦匹配）
     {"type":"error","message":"..."}  错误
     {"type":"stopped"}
 
@@ -21,6 +25,12 @@ sherpa_streaming.py — sherpa-onnx 流式 ASR sidecar。
       --model-dir ./asr-models/sherpa-onnx-x-asr-960ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05 \
       --wav ./asr-models/.../test_wavs/0.wav \
       > /tmp/asr.out
+
+T5 SCD 声纹模型（可选）：
+  --embedding-model-dir 指向 3d-speaker 等 sherpa-onnx speaker embedding 模型目录
+  （目录内含一个 *.onnx）。配置后每个 final 事件携带该段音频的 embedding 向量，
+  Rust 端据此做说话人余弦匹配；未配置/加载失败则 final 无 embedding 字段，
+  Rust 端 SCD 自动降级为单说话人（不会因缺模型而崩溃）。
 """
 
 from __future__ import annotations
@@ -150,6 +160,82 @@ class StreamingRecognizer:
 
 
 # ---------------------------------------------------------------------------
+# 说话人声纹提取（T5 SCD）：可选，模型缺失时优雅降级
+# ---------------------------------------------------------------------------
+
+
+def trim_trailing_silence(samples: np.ndarray, threshold: float = 1e-4) -> np.ndarray:
+    """去掉句尾静音。
+
+    端点检测（enable_endpoint_detection）的 final 会包含触发判定所需的尾部
+    静音（rule1/rule2 的 trailing silence），直接提声纹会掺入无用静音帧，
+    这里按幅值阈值裁掉尾部近零采样，只保留有效语音段。
+    """
+    if samples.size == 0:
+        return samples
+    nz = np.flatnonzero(np.abs(samples) > threshold)
+    if nz.size == 0:
+        return samples
+    return samples[: int(nz[-1]) + 1]
+
+
+class SpeakerEmbedder:
+    """sherpa-onnx 说话人声纹提取器（3d-speaker / wav2vec2 speaker 系列）。
+
+    - 构造时加载模型目录内第一个 `*.onnx`；模型缺失/加载失败 → `available=False`，
+      调用方不输出 embedding，Rust 端 SCD 相应降级为单说话人。
+    - `compute(samples)` 对一段 16kHz 音频返回声纹向量（list[float]）。
+
+    注：sherpa-onnx Python 绑定 API（SpeakerEmbeddingExtractor / create_stream /
+    is_ready / compute / get_result）以本机安装的 sherpa-onnx 版本为准；此处按
+    官方离线 speaker embedding 示例的接口形状编写，全部调用包在 try/except 内，
+    任何 API 差异都只会导致该段降级（不输出 embedding），不会拖垮识别主流程。
+    """
+
+    def __init__(self, model_dir: str, num_threads: int = 2, sample_rate: int = 16000):
+        self.extractor = None
+        self.sample_rate = sample_rate
+        if not model_dir:
+            return
+        p = Path(model_dir)
+        if not p.is_dir():
+            print(f"[sherpa_streaming] 声纹模型目录不存在，SCD 降级: {p}", file=sys.stderr)
+            return
+        onnx = next((f for f in p.iterdir() if f.suffix == ".onnx"), None)
+        if onnx is None:
+            print(f"[sherpa_streaming] 声纹模型目录内无 .onnx，SCD 降级: {p}", file=sys.stderr)
+            return
+        try:
+            self.extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+                model=str(onnx),
+                num_threads=num_threads,
+                debug=False,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[sherpa_streaming] 加载声纹模型失败，SCD 降级: {e}", file=sys.stderr)
+            self.extractor = None
+
+    @property
+    def available(self) -> bool:
+        return self.extractor is not None
+
+    def compute(self, samples: np.ndarray) -> list[float] | None:
+        """对一段音频提取说话人声纹向量；失败返回 None（调用方降级）。"""
+        if self.extractor is None:
+            return None
+        try:
+            stream = self.extractor.create_stream()
+            stream.accept_waveform(self.sample_rate, samples)
+            while self.extractor.is_ready(stream):
+                self.extractor.compute(stream)
+            emb = self.extractor.get_result(stream)
+            return [float(x) for x in emb]
+        except Exception as e:  # noqa: BLE001
+            print(f"[sherpa_streaming] 提取 embedding 失败，该段降级: {e}", file=sys.stderr)
+            return None
+
+
+# ---------------------------------------------------------------------------
 # 主循环：stdin 协议
 # ---------------------------------------------------------------------------
 
@@ -159,7 +245,18 @@ def emit(obj: dict):
     sys.stdout.flush()
 
 
-def run_streaming(stdin, model_dir: str, sample_rate: int):
+def final_event(text: str, seg_samples: np.ndarray | None, embedder: SpeakerEmbedder | None) -> dict:
+    """构造一条 final 事件；声纹模型可用时附带该段音频的 embedding（供 Rust 端 SCD）。"""
+    obj = {"type": "final", "text": text}
+    if seg_samples is not None and embedder is not None and embedder.available:
+        samples = trim_trailing_silence(seg_samples)
+        emb = embedder.compute(samples)
+        if emb:
+            obj["embedding"] = emb
+    return obj
+
+
+def run_streaming(stdin, model_dir: str, sample_rate: int, embedding_model_dir: str = ""):
     # -- 读配置行：逐字节直到换行，避免把后续二进制音频吞进缓冲
     line = b""
     while True:
@@ -176,18 +273,24 @@ def run_streaming(stdin, model_dir: str, sample_rate: int):
             sys.exit(1)
 
     rec = StreamingRecognizer(model_dir=model_dir, sample_rate=sample_rate)
+    embedder = SpeakerEmbedder(model_dir=embedding_model_dir, sample_rate=sample_rate)
     emit(
         {
             "type": "started",
             "streaming": True,
             "model": rec.model_dir.name,
             "sample_rate": rec.sample_rate,
+            # T5 SCD：声纹模型是否可用（Rust 端据此区分 embedding / 单说话人降级）
+            "scd_embedding": embedder.available,
         }
     )
 
     bytes_per_sample = 4  # float32
     buf = b""
     last_partial = ""
+    # 自上次 final 以来喂入的音频（用于给该 final 段提取声纹，端点判定含尾静音，
+    # 由 trim_trailing_silence 裁掉；reset 后重新累积下一段）。
+    seg_samples: list[np.ndarray] = []
 
     while True:
         chunk = stdin.read(1600 * bytes_per_sample)  # 100ms @16k
@@ -198,19 +301,23 @@ def run_streaming(stdin, model_dir: str, sample_rate: int):
             n = (len(buf) // (1600 * bytes_per_sample)) * (1600 * bytes_per_sample)
             samples = np.frombuffer(buf[:n], dtype=np.float32).copy()
             buf = buf[n:]
+            seg_samples.append(samples)
             partial = rec.feed(samples)
             if partial and partial != last_partial:
                 emit({"type": "partial", "text": partial})
                 last_partial = partial
             final = rec.maybe_finalize()
             if final:
-                emit({"type": "final", "text": final})
+                seg_audio = np.concatenate(seg_samples) if seg_samples else None
+                emit(final_event(final, seg_audio, embedder))
+                seg_samples = []
                 last_partial = ""
 
     # stdin EOF → 优雅关闭
     final = rec.finish()
     if final:
-        emit({"type": "final", "text": final})
+        seg_audio = np.concatenate(seg_samples) if seg_samples else None
+        emit(final_event(final, seg_audio, embedder))
     emit({"type": "stopped"})
 
 
@@ -253,6 +360,13 @@ def main():
     )
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument(
+        "--embedding-model-dir",
+        default="",
+        help="（可选，T5 SCD）说话人声纹模型目录（3d-speaker 等，内含 *.onnx）。"
+        "提供后每条 final 附带 embedding 字段供 Rust 端说话人余弦匹配；"
+        "缺失/加载失败则降级为单说话人",
+    )
+    parser.add_argument(
         "--wav",
         default="",
         help="独立验证模式：识别该 wav 并打印结果（不需要 Rust stdin）",
@@ -263,7 +377,7 @@ def main():
         run_wav(args.wav, args.model_dir, args.sample_rate)
     else:
         try:
-            run_streaming(sys.stdin.buffer, args.model_dir, args.sample_rate)
+            run_streaming(sys.stdin.buffer, args.model_dir, args.sample_rate, args.embedding_model_dir)
         except Exception as e:  # noqa: BLE001
             emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
             sys.exit(1)

@@ -30,6 +30,8 @@ fn utterance(speaker_id: u32, gender: Gender, text: &str) -> Utterance {
         gender,
         text: text.to_string(),
         ts: 0,
+        // mock 脚本不提供 SCD 判定，由 Engine 按已见说话人推导 is_new。
+        is_new_speaker: None,
     }
 }
 
@@ -160,7 +162,11 @@ impl Engine {
         let segment_id = self.next_segment_id;
         self.next_segment_id += 1;
 
-        let is_new_speaker = !self.known_speakers.contains(&utt.speaker_id);
+        // T5：真实路径由 SCD 判定 is_new_speaker（Utterance 携带 Some）；
+        // mock/降级路径未携带（None），退回「已见说话人集合」推导。
+        let is_new_speaker = utt
+            .is_new_speaker
+            .unwrap_or_else(|| !self.known_speakers.contains(&utt.speaker_id));
         if is_new_speaker {
             self.known_speakers.insert(utt.speaker_id);
         }
@@ -344,6 +350,42 @@ mod tests {
         assert_eq!(
             assignments.iter().map(|(_, _, n)| *n).collect::<Vec<_>>(),
             vec![true, true, false]
+        );
+    }
+
+    /// T5：SCD 提供的 is_new_speaker（Utterance 携带）优先于 known_speakers 推导。
+    /// 真实路径上「同一人重复出现但 SCD 判定新建」等边界情况以 SCD 为准。
+    #[test]
+    fn scd_is_new_flag_overrides_known_speakers() {
+        let script = vec![
+            Utterance {
+                speaker_id: 1,
+                gender: Gender::Unknown,
+                text: "a".into(),
+                ts: 0,
+                is_new_speaker: Some(true),
+            },
+            // 说话人 1 第二次出现，SCD 标记新建（如首个 final 为短发言未注册模板）
+            Utterance {
+                speaker_id: 1,
+                gender: Gender::Unknown,
+                text: "b".into(),
+                ts: 0,
+                is_new_speaker: Some(true),
+            },
+            Utterance {
+                speaker_id: 2,
+                gender: Gender::Unknown,
+                text: "c".into(),
+                ts: 0,
+                is_new_speaker: Some(false),
+            },
+        ];
+        let (_, _, assignments) = run_script(script);
+        assert_eq!(
+            assignments.iter().map(|(_, _, n)| *n).collect::<Vec<_>>(),
+            vec![true, true, false],
+            "SCD 判定优先：第二次仍 true（SCD 视角是新建），说话人 2 首次出现但 SCD 归入旧模板 → false"
         );
     }
 
