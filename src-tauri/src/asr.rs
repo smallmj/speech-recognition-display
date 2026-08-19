@@ -103,8 +103,8 @@ impl SherpaAsr {
         let partials = Arc::new(Mutex::new(VecDeque::new()));
         let status = Arc::new(AtomicU8::new(ST_STARTING));
         let last_error = Arc::new(Mutex::new(None));
-        // T5：SCD 状态由 stdout 读线程独占写入；外部只读（scd_configured 等）。
-        let scd = Arc::new(Mutex::new(Scd::default()));
+        // T5：SCD 状态由 stdout 读线程独占持有（下方闭包内创建并 move 进线程，
+        // 外部只读 scd_configured / scd_embedding_active，无需 struct 字段）。
         let scd_embedding = Arc::new(AtomicBool::new(false));
 
         // -- stdout 读取线程：NDJSON → 队列（final 经 SCD 决定 speaker_id） --
