@@ -23,7 +23,9 @@
 //!
 //! T5（SCD）接线：说话人切换检测在 [crate::asr::SherpaAsr] 内部完成 —— stdout 读线程
 //! 在解析每条 final 时（embedding 的唯一来源点）经 [engine::Scd] 决定
-//! speaker_id/gender/is_new_speaker，再以 [engine::Utterance] 进入 [engine::Engine]。
+//! speaker_id/gender/is_new_speaker，speaker_id 随 [engine::Utterance] 进入
+//! [engine::CleanupPipeline]（[append_utterance]），`is_new_speaker` 判定用于
+//! `SpeakerAssigned` 事件（有判定用判定，降级路径 None 退回「首次出现即新建」）。
 //! 因此本模块无需持有 SCD 状态；配置了 speaker embedding 模型时
 //! [crate::asr::SherpaAsr::scd_embedding_active] 为真（真实余弦匹配），否则降级
 //! 为单说话人（见 asr.rs 注释）。
