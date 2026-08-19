@@ -1,0 +1,346 @@
+/**
+ * 设置对话框（T12）：所有配置集中到标签页分组界面。
+ *
+ * 标签页：常规 / ASR / LLM 整理 / 显示 / 快捷键 / 历史 / 关于（规格 #31）。
+ * - 常规：整理间隔 5s/10s，保存到 Rust 端 `app-settings.json`，后台每秒轮询
+ *   即时生效（规格 #21、#42）。
+ * - ASR / LLM 整理：嵌入既有面板（embedded 模式，无折叠按钮、始终展开表单）。
+ * - 显示：主题 / 字号 / 字体 / 文字颜色 / 置顶大字，localStorage 持久化 + 即时应用。
+ * - 快捷键：当前窗口内可用操作与按键说明（全局热键 / 托盘常驻由 T13 提供）。
+ * - 历史：嵌入会话历史面板（列表 + 重新打开 + 导出）。
+ * - 关于：版本 / 技术栈 / 规格与实现索引。
+ */
+
+import { useState } from "react";
+import {
+  DISPLAY_LABELS,
+  useDisplaySettings,
+  type FontFamily,
+  type FontSize,
+  type TextColor,
+  type Theme,
+} from "../displaySettings";
+import type { CleanupInterval } from "./DualTrackView";
+import AsrConfigPanel from "./AsrConfigPanel";
+import LlmConfigPanel from "./LlmConfigPanel";
+import SessionHistoryPanel from "./SessionHistoryPanel";
+
+export interface SettingsDialogProps {
+  open: boolean;
+  onClose: () => void;
+  /** 当前整理间隔（秒），与 Rust `app-settings.json` 保持一致。 */
+  cleanupInterval: CleanupInterval;
+  /** 切换整理间隔（App 侧负责保存到 Rust 配置并即时生效）。 */
+  onCleanupIntervalChange: (seconds: CleanupInterval) => void;
+  /** 最近一次纪要文本（历史页刷新用）。 */
+  latestMinutes: string | null;
+}
+
+type TabId = "general" | "asr" | "llm" | "display" | "shortcut" | "history" | "about";
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: "general", label: "常规" },
+  { id: "asr", label: "ASR" },
+  { id: "llm", label: "LLM 整理" },
+  { id: "display", label: "显示" },
+  { id: "shortcut", label: "快捷键" },
+  { id: "history", label: "历史" },
+  { id: "about", label: "关于" },
+];
+
+/** 当前版本窗口内可用的操作与按键（全局热键/托盘由 T13 提供）。 */
+const SHORTCUT_ROWS: { operation: string; how: string }[] = [
+  { operation: "打开 / 关闭设置", how: "点击头部「⚙ 设置」按钮；按 Esc 关闭。" },
+  { operation: "退出置顶大字模式", how: "按 Esc，或点击悬浮的「✕ 退出大字」按钮。" },
+  { operation: "显示原文 / 整理版切换", how: "点击字幕工具栏「显示原文 / 显示整理版」按钮。" },
+  { operation: "切换整理间隔", how: "点击字幕工具栏的 5s / 10s 按钮，或到「设置 → 常规」调整。" },
+  { operation: "开始识别", how: "点击头部「▶ 开始识别」按钮。" },
+  { operation: "停止并生成纪要", how: "点击头部「⏹ 停止并生成纪要」按钮。" },
+];
+
+export default function SettingsDialog({
+  open,
+  onClose,
+  cleanupInterval,
+  onCleanupIntervalChange,
+  latestMinutes,
+}: SettingsDialogProps) {
+  const [activeTab, setActiveTab] = useState<TabId>("general");
+  const { settings, setTheme, setFocusMode, setFontSize, setFontFamily, setTextColor } =
+    useDisplaySettings();
+
+  if (!open) return null;
+
+  const themeOptions: { value: Theme; label: string }[] = [
+    { value: "auto", label: "跟随系统" },
+    { value: "light", label: "浅色" },
+    { value: "dark", label: "深色" },
+  ];
+
+  const sizeOptions: { value: FontSize; label: string }[] = [
+    { value: "small", label: DISPLAY_LABELS.fontSize.small },
+    { value: "medium", label: DISPLAY_LABELS.fontSize.medium },
+    { value: "large", label: DISPLAY_LABELS.fontSize.large },
+    { value: "xlarge", label: DISPLAY_LABELS.fontSize.xlarge },
+  ];
+
+  const familyOptions: { value: FontFamily; label: string }[] = [
+    { value: "default", label: DISPLAY_LABELS.fontFamily.default },
+    { value: "pingfang", label: DISPLAY_LABELS.fontFamily.pingfang },
+    { value: "songti", label: DISPLAY_LABELS.fontFamily.songti },
+    { value: "heiti", label: DISPLAY_LABELS.fontFamily.heiti },
+    { value: "kaiti", label: DISPLAY_LABELS.fontFamily.kaiti },
+  ];
+
+  const colorOptions: { value: TextColor; label: string }[] = [
+    { value: "default", label: DISPLAY_LABELS.textColor.default },
+    { value: "black", label: DISPLAY_LABELS.textColor.black },
+    { value: "darkgray", label: DISPLAY_LABELS.textColor.darkgray },
+    { value: "white", label: DISPLAY_LABELS.textColor.white },
+    { value: "darkblue", label: DISPLAY_LABELS.textColor.darkblue },
+  ];
+
+  return (
+    <div className="settings-dialog-overlay" onClick={onClose}>
+      <div
+        className="settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="设置"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="settings-dialog-header">
+          <span className="settings-dialog-title">⚙ 设置</span>
+          <button
+            type="button"
+            className="settings-dialog-close"
+            onClick={onClose}
+            aria-label="关闭设置"
+            title="关闭设置（Esc）"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div className="settings-dialog-body">
+          <nav className="settings-tabs" aria-label="设置分组">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`settings-tab ${activeTab === tab.id ? "is-active" : ""}`}
+                aria-selected={activeTab === tab.id}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="settings-tab-content">
+            {activeTab === "general" && (
+              <section className="settings-tab-section">
+                <p className="settings-panel-section-title">整理间隔</p>
+                <p className="settings-panel-hint">
+                  字幕从原文切换为整理版的固定节奏：间隔短刷新更快，间隔长整理更稳定。
+                </p>
+                <div className="settings-option-row" role="group" aria-label="整理间隔">
+                  {([5, 10] as const).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      className={`settings-option ${cleanupInterval === s ? "active" : ""}`}
+                      aria-pressed={cleanupInterval === s}
+                      onClick={() => onCleanupIntervalChange(s)}
+                    >
+                      {s} 秒
+                    </button>
+                  ))}
+                </div>
+                <p className="settings-panel-hint">
+                  选择后立即保存到本机并即时生效（后台每秒同步），无需重启应用。
+                </p>
+              </section>
+            )}
+
+            {activeTab === "asr" && (
+              <section className="settings-tab-section">
+                <p className="settings-panel-hint">
+                  选择识别来源：本地 sherpa-onnx 离线识别，或 Deepgram 兼容云端流式识别。
+                  云端配置保存在本机，保存后自动热切换，无需重启。
+                </p>
+                <AsrConfigPanel embedded />
+              </section>
+            )}
+
+            {activeTab === "llm" && (
+              <section className="settings-tab-section">
+                <p className="settings-panel-hint">
+                  配置 OpenAI 兼容服务（Base URL + API Key + 模型名），可对接 DeepSeek、豆包、
+                  OpenAI、本地 Ollama 等。每次整理请求前自动读取最新配置，保存后即时生效。
+                </p>
+                <LlmConfigPanel embedded />
+              </section>
+            )}
+
+            {activeTab === "display" && (
+              <section className="settings-tab-section">
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">主题</p>
+                  <p className="settings-panel-hint">跟随系统或手动固定浅色 / 深色。</p>
+                  <div className="settings-option-row">
+                    {themeOptions.map((t) => (
+                      <button
+                        key={t.value}
+                        className={`settings-option ${settings.theme === t.value ? "active" : ""}`}
+                        onClick={() => setTheme(t.value)}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">字号</p>
+                  <p className="settings-panel-hint">气泡文字大小，越大越易读。</p>
+                  <div className="settings-option-row">
+                    {sizeOptions.map((s) => (
+                      <button
+                        key={s.value}
+                        className={`settings-option ${settings.fontSize === s.value ? "active" : ""}`}
+                        onClick={() => setFontSize(s.value)}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">字体</p>
+                  <p className="settings-panel-hint">气泡文字字体，随系统字体渲染。</p>
+                  <div className="settings-option-row">
+                    {familyOptions.map((f) => (
+                      <button
+                        key={f.value}
+                        className={`settings-option ${settings.fontFamily === f.value ? "active" : ""}`}
+                        onClick={() => setFontFamily(f.value)}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">文字颜色</p>
+                  <p className="settings-panel-hint">气泡文字颜色，深色背景建议浅色文字。</p>
+                  <div className="settings-option-row">
+                    {colorOptions.map((c) => (
+                      <button
+                        key={c.value}
+                        className={`settings-option ${settings.textColor === c.value ? "active" : ""}`}
+                        onClick={() => setTextColor(c.value)}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <div className="settings-toggle-row">
+                    <span className="settings-toggle-label">置顶大字模式</span>
+                    <button
+                      className={`settings-toggle ${settings.focusMode ? "on" : ""}`}
+                      onClick={() => setFocusMode(!settings.focusMode)}
+                      aria-label="切换置顶大字模式"
+                    >
+                      <span className="settings-toggle-knob" />
+                    </button>
+                  </div>
+                  <p className="settings-panel-hint">
+                    窗口始终置顶 + 超大字体；按 Esc 或悬浮按钮退出。所有显示设置自动保存。
+                  </p>
+                </div>
+              </section>
+            )}
+
+            {activeTab === "shortcut" && (
+              <section className="settings-tab-section">
+                <p className="settings-panel-hint">
+                  当前版本支持窗口内的按钮与键盘操作；全局热键与托盘常驻由 T13 提供。
+                </p>
+                <ul className="settings-shortcut-list">
+                  {SHORTCUT_ROWS.map((row) => (
+                    <li key={row.operation} className="settings-shortcut-row">
+                      <span className="settings-shortcut-operation">{row.operation}</span>
+                      <span className="settings-shortcut-how">{row.how}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {activeTab === "history" && (
+              <section className="settings-tab-section">
+                <p className="settings-panel-hint">
+                  每次「停止并生成纪要」后自动保存到本机，重启后仍在；可重新打开查看并导出
+                  Markdown / TXT / SRT。
+                </p>
+                <SessionHistoryPanel embedded latestMinutes={latestMinutes} />
+              </section>
+            )}
+
+            {activeTab === "about" && (
+              <section className="settings-tab-section">
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">版本</p>
+                  <p className="settings-about-line">语音识别展示系统 v0.1.0（听障实时字幕气泡展示系统 MVP）。</p>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">技术栈</p>
+                  <p className="settings-about-line">
+                    Tauri 2 + React 18 + Rust engine 核心库；本地 sherpa-onnx 流式 ASR /
+                    Deepgram 兼容云端 ASR / OpenAI 兼容 LLM（SSE 流式整理 + 会议纪要）。
+                  </p>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">数据与配置</p>
+                  <p className="settings-about-line">
+                    显示设置保存在浏览器本地；ASR / LLM / 常规设置保存在系统应用配置目录；
+                    会话历史保存在系统应用数据目录，均可随应用卸载清理。
+                  </p>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">规格与实现</p>
+                  <p className="settings-about-line">
+                    依据规格 Issue #1 与 T1–T13 任务拆解实现；本设置界面为 T12。
+                  </p>
+                </div>
+              </section>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

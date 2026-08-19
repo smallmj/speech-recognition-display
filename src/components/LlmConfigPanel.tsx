@@ -33,8 +33,13 @@ export interface LlmModelSummary {
 export const DEFAULT_PERSONA =
   "你是实时字幕整理助手：把用户提供的口语化原文整理成通顺的书面语，去口语化、纠正错别字、补充标点，不改变原意，不添加原话没有的信息。直接输出整理结果，不要任何解释或前缀。";
 
-export default function LlmConfigPanel() {
-  const [open, setOpen] = useState(false);
+export interface LlmConfigPanelProps {
+  /** 嵌入设置对话框：不显示折叠按钮，始终展开表单（T12）。 */
+  embedded?: boolean;
+}
+
+export default function LlmConfigPanel({ embedded = false }: LlmConfigPanelProps) {
+  const [open, setOpen] = useState(embedded);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
@@ -96,16 +101,18 @@ export default function LlmConfigPanel() {
 
   return (
     <div className="llm-config">
-      <button
-        type="button"
-        className="llm-config-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        ⚙️ LLM 配置 {open ? "▾" : "▸"}
-      </button>
+      {!embedded && (
+        <button
+          type="button"
+          className="llm-config-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          ⚙️ LLM 配置 {open ? "▾" : "▸"}
+        </button>
+      )}
 
-      {open && (
+      {(embedded || open) && (
         <div className="llm-config-form">
           <label className="llm-field">
             <span>Base URL</span>

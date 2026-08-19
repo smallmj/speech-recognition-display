@@ -718,3 +718,159 @@ body {
   background: rgba(255, 59, 48, 0.08);
   color: #d43a30;
 }
+
+/* ===================================================================
+ * 设置对话框（T12：标签页分组设置）
+ * =================================================================== */
+
+.settings-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.settings-dialog {
+  width: min(860px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  background: var(--settings-panel-bg);
+  color: var(--settings-panel-fg);
+  border: 1px solid var(--settings-panel-border);
+  border-radius: 14px;
+  box-shadow: var(--settings-panel-shadow);
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.settings-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--settings-divider);
+}
+
+.settings-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-dialog-close {
+  border: 1px solid var(--settings-panel-border);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.settings-dialog-close:hover {
+  background: var(--settings-btn-hover);
+}
+
+.settings-dialog-body {
+  display: flex;
+  min-height: 0;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--settings-divider);
+  min-width: 132px;
+}
+
+.settings-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.settings-tab:hover {
+  background: var(--settings-option-hover);
+  opacity: 1;
+}
+
+.settings-tab.is-active {
+  background: var(--settings-option-active-bg);
+  color: var(--settings-option-active-fg);
+  opacity: 1;
+  font-weight: 600;
+}
+
+.settings-tab-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 18px;
+}
+
+.settings-tab-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-shortcut-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-shortcut-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  border: 1px solid var(--settings-divider);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.settings-shortcut-operation {
+  font-weight: 600;
+  min-width: 168px;
+}
+
+.settings-shortcut-how {
+  opacity: 0.75;
+  line-height: 1.5;
+}
+
+.settings-about-line {
+  margin: 0;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+
+@media (max-width: 640px) {
+  .settings-dialog-body {
+    flex-direction: column;
+  }
+
+  .settings-tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--settings-divider);
+    min-width: 0;
+  }
+}

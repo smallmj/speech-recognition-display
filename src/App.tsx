@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import DualTrackView, { reduceEvents, useEngineEvents } from "./components/DualTrackView";
-import AsrConfigPanel from "./components/AsrConfigPanel";
-import LlmConfigPanel from "./components/LlmConfigPanel";
+import DualTrackView, {
+  reduceEvents,
+  useEngineEvents,
+  type CleanupInterval,
+} from "./components/DualTrackView";
+import SettingsDialog from "./components/SettingsDialog";
 import AsrLiveRow from "./components/AsrLiveRow";
 import MinutesPanel from "./components/MinutesPanel";
-import SessionHistoryPanel from "./components/SessionHistoryPanel";
 import {
   ENGINE_EVENT,
   STATUS_EVENT,
@@ -18,13 +20,7 @@ import { profileOf, useSpeakerProfiles, type SpeakerProfiles } from "./speakerPr
 import { subscribe } from "./tauriEvent";
 import {
   DisplayContext,
-  useDisplaySettings,
   useDisplaySettingsState,
-  type FontFamily,
-  type FontSize,
-  type TextColor,
-  type Theme,
-  DISPLAY_LABELS,
 } from "./displaySettings";
 
 /** Rust 端 emit 的 ping 事件负载（调试心跳，T1 遗留）。 */
@@ -64,153 +60,9 @@ function buildTranscriptMarkdown(
     .join("\n\n");
 }
 
-// ---------------------------------------------------------------------------
-// 设置面板（在 Provider 内部渲染，可直接使用 useDisplaySettings）
-// ---------------------------------------------------------------------------
-
-function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { settings, setTheme, setFocusMode, setFontSize, setFontFamily, setTextColor } =
-    useDisplaySettings();
-
-  // ESC 关闭
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  const themeOptions: { value: Theme; label: string }[] = [
-    { value: "auto", label: "跟随系统" },
-    { value: "light", label: "浅色" },
-    { value: "dark", label: "深色" },
-  ];
-
-  const sizeOptions: { value: FontSize; label: string }[] = [
-    { value: "small", label: DISPLAY_LABELS.fontSize.small },
-    { value: "medium", label: DISPLAY_LABELS.fontSize.medium },
-    { value: "large", label: DISPLAY_LABELS.fontSize.large },
-    { value: "xlarge", label: DISPLAY_LABELS.fontSize.xlarge },
-  ];
-
-  const familyOptions: { value: FontFamily; label: string }[] = [
-    { value: "default", label: DISPLAY_LABELS.fontFamily.default },
-    { value: "pingfang", label: DISPLAY_LABELS.fontFamily.pingfang },
-    { value: "songti", label: DISPLAY_LABELS.fontFamily.songti },
-    { value: "heiti", label: DISPLAY_LABELS.fontFamily.heiti },
-    { value: "kaiti", label: DISPLAY_LABELS.fontFamily.kaiti },
-  ];
-
-  const colorOptions: { value: TextColor; label: string }[] = [
-    { value: "default", label: DISPLAY_LABELS.textColor.default },
-    { value: "black", label: DISPLAY_LABELS.textColor.black },
-    { value: "darkgray", label: DISPLAY_LABELS.textColor.darkgray },
-    { value: "white", label: DISPLAY_LABELS.textColor.white },
-    { value: "darkblue", label: DISPLAY_LABELS.textColor.darkblue },
-  ];
-
-  return (
-    <>
-      {/* 覆盖层：点击关闭 */}
-      <div className="settings-panel-overlay" onClick={onClose} />
-      <div className="settings-panel">
-        {/* 主题 */}
-        <div className="settings-panel-section">
-          <p className="settings-panel-section-title">主题</p>
-          <p className="settings-panel-hint">跟随系统或手动固定</p>
-          <div className="settings-option-row">
-            {themeOptions.map((t) => (
-              <button
-                key={t.value}
-                className={`settings-option ${settings.theme === t.value ? "active" : ""}`}
-                onClick={() => setTheme(t.value)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <hr className="settings-panel-divider" />
-
-        {/* 字号 */}
-        <div className="settings-panel-section">
-          <p className="settings-panel-section-title">字号</p>
-          <p className="settings-panel-hint">气泡文字大小</p>
-          <div className="settings-option-row">
-            {sizeOptions.map((s) => (
-              <button
-                key={s.value}
-                className={`settings-option ${settings.fontSize === s.value ? "active" : ""}`}
-                onClick={() => setFontSize(s.value)}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <hr className="settings-panel-divider" />
-
-        {/* 字体 */}
-        <div className="settings-panel-section">
-          <p className="settings-panel-section-title">字体</p>
-          <p className="settings-panel-hint">气泡文字字体</p>
-          <div className="settings-option-row">
-            {familyOptions.map((f) => (
-              <button
-                key={f.value}
-                className={`settings-option ${settings.fontFamily === f.value ? "active" : ""}`}
-                onClick={() => setFontFamily(f.value)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <hr className="settings-panel-divider" />
-
-        {/* 文字颜色 */}
-        <div className="settings-panel-section">
-          <p className="settings-panel-section-title">文字颜色</p>
-          <p className="settings-panel-hint">气泡文字颜色</p>
-          <div className="settings-option-row">
-            {colorOptions.map((c) => (
-              <button
-                key={c.value}
-                className={`settings-option ${settings.textColor === c.value ? "active" : ""}`}
-                onClick={() => setTextColor(c.value)}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <hr className="settings-panel-divider" />
-
-        {/* 置顶大字 */}
-        <div className="settings-panel-section">
-          <div className="settings-toggle-row">
-            <span className="settings-toggle-label">置顶大字模式</span>
-            <button
-              className={`settings-toggle ${settings.focusMode ? "on" : ""}`}
-              onClick={() => setFocusMode(!settings.focusMode)}
-              aria-label="切换置顶大字模式"
-            >
-              <span className="settings-toggle-knob" />
-            </button>
-          </div>
-          <p className="settings-panel-hint">窗口始终置顶 + 超大字体</p>
-        </div>
-      </div>
-    </>
-  );
+/** 与 Rust `src-tauri/src/app_settings.rs` 的 `AppSettings` 对齐（camelCase）。 */
+interface AppSettings {
+  cleanupIntervalSeconds: 5 | 10;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +77,8 @@ export default function App() {
   const [engineLive, setEngineLive] = useState(false);
   const [asrMode, setAsrMode] = useState<StatusPayload["mode"] | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // T12 整理间隔：启动时从 Rust 常规配置加载，切换后保存并即时生效。
+  const [cleanupInterval, setCleanupInterval] = useState<CleanupInterval>(5);
   // T10 会话状态机：识别中 → 停止/生成纪要 → 纪要已生成 →（开始识别）识别中。
   const [sessionStatus, setSessionStatus] = useState<
     "recognizing" | "stopping" | "generating" | "ready"
@@ -265,6 +119,24 @@ export default function App() {
       .setAlwaysOnTop(focusMode)
       .catch((e) => console.warn("[display] setAlwaysOnTop 失败:", e));
   }, [focusMode]);
+
+  // 加载已保存的常规设置（整理间隔），重启后保留。
+  useEffect(() => {
+    invoke<AppSettings>("load_app_settings")
+      .then((settings) => {
+        setCleanupInterval(settings.cleanupIntervalSeconds);
+      })
+      .catch((e) => console.warn("[settings] 加载常规配置失败:", e));
+  }, []);
+
+  // 切换整理间隔：立即更新本地展示状态，并保存到 Rust 端 app-settings.json；
+  // 后台驱动线程每秒轮询该配置并热更新整理节奏，无需重启。
+  const handleCleanupIntervalChange = useCallback((seconds: CleanupInterval) => {
+    setCleanupInterval(seconds);
+    invoke("save_app_settings", { settings: { cleanupIntervalSeconds: seconds } }).catch((e) =>
+      console.error("[settings] 保存常规配置失败:", e),
+    );
+  }, []);
 
   // 全局 ESC：设置面板打开时先关面板；否则若在置顶大字模式则退出大字模式。
   // （置顶大字模式下头部被隐藏，ESC 是必须的退出途径之一。）
@@ -411,28 +283,29 @@ export default function App() {
               📌 置顶大字
             </button>
 
-            {/* 显示设置按钮 */}
+            {/* 设置按钮：打开标签页分组设置对话框（T12） */}
             <button
               className="settings-btn"
               onClick={() => setSettingsOpen((v) => !v)}
-              title="显示设置"
+              title="设置（标签页分组）"
             >
-              ⚙ 显示
+              ⚙ 设置
             </button>
           </div>
         </header>
 
         <main className="app-main">
-          <AsrConfigPanel />
-          <LlmConfigPanel />
-          <DualTrackView events={sessionEvents} />
+          <DualTrackView
+            events={sessionEvents}
+            intervalSeconds={cleanupInterval}
+            onIntervalChange={handleCleanupIntervalChange}
+          />
           <AsrLiveRow />
           <MinutesPanel
             minutes={minutes}
             transcript={transcript}
             generating={sessionStatus === "stopping" || sessionStatus === "generating"}
           />
-          <SessionHistoryPanel latestMinutes={minutes} />
         </main>
 
         <footer className="app-footer">
@@ -451,7 +324,13 @@ export default function App() {
           </button>
         )}
 
-        <SettingsPanel open={settingsOpen} onClose={closeSettings} />
+        <SettingsDialog
+          open={settingsOpen}
+          onClose={closeSettings}
+          cleanupInterval={cleanupInterval}
+          onCleanupIntervalChange={handleCleanupIntervalChange}
+          latestMinutes={minutes}
+        />
       </div>
     </DisplayContext.Provider>
   );

@@ -42,6 +42,7 @@ use engine::{
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::asr::SherpaAsr;
+use crate::app_settings;
 use crate::asr_config::{self, AsrConfig, AsrSource};
 use crate::cloud_asr::CloudAsr;
 use crate::llm::{self, OpenAiLlmClient};
@@ -57,6 +58,9 @@ const TICK_INTERVAL: Duration = Duration::from_millis(200);
 
 /// ASR 配置轮询间隔（5 个 tick = 1s）。保存配置后无需重启应用。
 const ASR_CONFIG_POLL_TICKS: u32 = 5;
+
+/// 常规应用设置轮询间隔（5 个 tick = 1s）。整理间隔保存后即时生效。
+const APP_SETTINGS_POLL_TICKS: u32 = 5;
 
 /// ASR 数据源模式（决定追加节奏与 partial 是否可用）。
 enum AsrMode {
@@ -242,9 +246,14 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         // 整理管线：初始 MockLlmPort 仅作占位；每个 pending 在 worker 线程里
         // 按最新配置选择 Mock / 真实 LLM，结果经通道回主循环回填。
         let mut pipeline = CleanupPipeline::new_with_defaults(Box::new(MockLlmPort));
+        // 常规设置：启动时应用已保存的整理间隔；之后每秒轮询，档位变化即时
+        // 更新节奏（无需重建管线）。
+        let mut app_config = app_settings::read_config(&handle);
+        pipeline.set_rhythm_duration(app_config.cleanup_interval());
         let mut now = Duration::ZERO; // 逻辑时钟（自管道创建起算）
         let mut known_speakers: Vec<u32> = Vec::new(); // 已登记说话人（颜色/性别）
         let mut config_poll_ticks: u32 = 0;
+        let mut app_settings_poll_ticks: u32 = 0;
         // LLM 整理在独立线程执行，结果经通道交回；dispatched_edit_id 防止
         // 同一条 pending 被重复送线程（pending 清空后 edit_id 才递增）。
         let (llm_result_tx, llm_result_rx) = mpsc::channel::<LlmOutcome>();
@@ -258,6 +267,24 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         loop {
             now += TICK_INTERVAL;
             config_poll_ticks += 1;
+            app_settings_poll_ticks += 1;
+
+            // 0. 常规设置轮询：整理间隔变化时热更新固定节奏（T12）。
+            if app_settings_poll_ticks >= APP_SETTINGS_POLL_TICKS {
+                app_settings_poll_ticks = 0;
+                let next_app_config = app_settings::read_config(&handle);
+                if next_app_config.cleanup_interval_seconds
+                    != app_config.cleanup_interval_seconds
+                {
+                    println!(
+                        "[settings] 整理间隔 {}s → {}s（即时生效）",
+                        app_config.cleanup_interval_seconds,
+                        next_app_config.cleanup_interval_seconds
+                    );
+                    pipeline.set_rhythm_duration(next_app_config.cleanup_interval());
+                    app_config = next_app_config;
+                }
+            }
 
             // 1. ASR 配置轮询：保存后热切换来源。切换前排空旧 final，
             //    pipeline / known_speakers / pending 状态保持不变。
@@ -292,6 +319,7 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 // 停止期间 ASR 可能仍积累 final：丢弃，避免旧会话内容混入新会话。
                 discard_asr_inputs(&mut asr, &mode);
                 pipeline = CleanupPipeline::new_with_defaults(Box::new(MockLlmPort));
+                pipeline.set_rhythm_duration(app_config.cleanup_interval());
                 now = Duration::ZERO;
                 known_speakers.clear();
                 dispatched_edit_id = None;

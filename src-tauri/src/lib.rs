@@ -14,6 +14,7 @@
 //! 与模型列表命令（[crate::llm::list_llm_models]）。
 
 mod asr;
+mod app_settings;
 mod asr_config;
 pub mod audio;
 mod bridge;
@@ -50,6 +51,8 @@ pub fn run() {
             llm::list_llm_models,
             asr_config::load_asr_config,
             asr_config::save_asr_config,
+            app_settings::load_app_settings,
+            app_settings::save_app_settings,
             pipeline::start_session,
             pipeline::stop_session,
             export::export_session,

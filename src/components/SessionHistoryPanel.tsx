@@ -38,6 +38,8 @@ export interface SessionSummary {
 export interface SessionHistoryPanelProps {
   /** 最近一次纪要文本；变化（含新会话清空）时刷新历史列表。 */
   latestMinutes: string | null;
+  /** 嵌入设置对话框：不显示折叠按钮，始终展开列表（T12）。 */
+  embedded?: boolean;
 }
 
 function formatTime(ms: number): string {
@@ -46,8 +48,11 @@ function formatTime(ms: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-export default function SessionHistoryPanel({ latestMinutes }: SessionHistoryPanelProps) {
-  const [open, setOpen] = useState(false);
+export default function SessionHistoryPanel({
+  latestMinutes,
+  embedded = false,
+}: SessionHistoryPanelProps) {
+  const [open, setOpen] = useState(embedded);
   const [summaries, setSummaries] = useState<SessionSummary[]>([]);
   const [selected, setSelected] = useState<SessionRecord | null>(null);
   const [listStatus, setListStatus] = useState("");
@@ -96,16 +101,18 @@ export default function SessionHistoryPanel({ latestMinutes }: SessionHistoryPan
 
   return (
     <section className="session-history">
-      <button
-        type="button"
-        className="session-history-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        📚 历史会话 {open ? "▾" : "▸"}
-      </button>
+      {!embedded && (
+        <button
+          type="button"
+          className="session-history-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          📚 历史会话 {open ? "▾" : "▸"}
+        </button>
+      )}
 
-      {open && (
+      {(embedded || open) && (
         <div className="session-history-body">
           <div className="session-history-toolbar">
             <button type="button" className="session-history-refresh" onClick={refresh}>

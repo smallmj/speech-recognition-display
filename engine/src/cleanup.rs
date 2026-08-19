@@ -202,6 +202,11 @@ impl CleanupScheduler {
     pub fn rhythm_duration(&self) -> Duration {
         self.rhythm_duration
     }
+
+    /// 运行时更新固定节奏（T12 设置系统：保存后即时生效，无需重建管线）。
+    pub fn set_rhythm_duration(&mut self, rhythm_duration: Duration) {
+        self.rhythm_duration = rhythm_duration;
+    }
 }
 
 /// 一次在途整理请求（单在途：同一时刻至多一个）。
@@ -259,6 +264,11 @@ impl CleanupPipeline {
     /// 默认参数：防抖 2s，固定节奏 5s。
     pub fn new_with_defaults(llm: Box<dyn LlmPort>) -> Self {
         Self::new(Duration::from_secs(2), Duration::from_secs(5), llm)
+    }
+
+    /// 运行时更新整理节奏（固定节奏档位），由壳层在轮询常规配置时调用。
+    pub fn set_rhythm_duration(&mut self, rhythm_duration: Duration) {
+        self.scheduler.set_rhythm_duration(rhythm_duration);
     }
 
     /// 追加一段不可变原文，生成全局单调 id，产出 `SegmentAppended`。
@@ -693,6 +703,20 @@ mod tests {
         assert!(!p.tick(secs(5)), "t=5s 配置 10s 节奏不应触发");
         // 10s：距上次节奏触发 10s → 固定节奏触发
         assert!(p.tick(secs(10)), "t=10s 应因 10s 节奏触发（防抖未到）");
+    }
+
+    #[test]
+    fn rhythm_duration_can_be_changed_live() {
+        let mut p = CleanupPipeline::new(secs(2), secs(10), Box::new(MockLlmPort));
+        for t in 0..10 {
+            p.append(secs(t), 1, format!("第{t}段"));
+        }
+        assert!(!p.tick(secs(5)), "改前 10s 节奏不触发");
+
+        // 设置系统保存新档位后，下一次节拍按新节奏生效。
+        p.set_rhythm_duration(secs(5));
+        assert_eq!(p.scheduler().rhythm_duration(), secs(5));
+        assert!(p.tick(secs(10)), "改后 5s 节奏立即生效（距上次节奏触发已 10s）");
     }
 
     // ---- 验收：单在途 ----

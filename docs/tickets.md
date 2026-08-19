@@ -17,12 +17,11 @@
 | T9 | [#10](https://github.com/smallmj/speech-recognition-display/issues/10) | 真实 LLM 接入（OpenAI 兼容 + SSE + 重试） | T8 | ✅ 已合并 (PR #15) |
 | T10 | [#11](https://github.com/smallmj/speech-recognition-display/issues/11) | 会议纪要（停止后分批汇总） | T9 | ✅ 已完成（本地提交） |
 | T11 | [#12](https://github.com/smallmj/speech-recognition-display/issues/12) | 会话历史与导出 | T10 | ✅ 已完成（本地提交） |
-| T12 | [#13](https://github.com/smallmj/speech-recognition-display/issues/13) | 设置系统（标签页 + 操作提示 + 持久化） | T3, T7, T9, T11 | 🟢 frontier |
+| T12 | [#13](https://github.com/smallmj/speech-recognition-display/issues/13) | 设置系统（标签页 + 操作提示 + 持久化） | T3, T7, T9, T11 | ✅ 已完成（本地提交） |
 | T13 | [#14](https://github.com/smallmj/speech-recognition-display/issues/14) | 托盘常驻 + 全局热键 + 会话状态 | T2 | 🟢 frontier · ⚠️ PR #18 返工中 |
 
 ## 🟢 Frontier（依赖就绪，可开始）
 
-- **T12**（设置系统）— 依赖 T3/T7/T9/T11 已完成，可开始
 - **T13**（托盘+热键）— PR #18 返工中（rebase + 修 9 编译错 + manage/命令 + 停止真停 ASR）
 
 ## 🔴 Blocked（等前置票）
@@ -37,5 +36,5 @@ T1 ✅
           │         └─ T7 ✅       │
           ├─ T8 ✅ ─ T9 ✅ ─ T10 ✅ ─ T11 ✅ ─┐
           └─ T13 🟢                  │
-          T12 🟢 ◀─────────────────┘ (T3,T7,T9,T11)
+          T12 ✅ ◀──────────────────┘ (T3,T7,T9,T11)
 ```

@@ -26,8 +26,13 @@ const DEFAULT_CONFIG: AsrConfig = {
   cloudLanguage: "multi",
 };
 
-export default function AsrConfigPanel() {
-  const [open, setOpen] = useState(false);
+export interface AsrConfigPanelProps {
+  /** 嵌入设置对话框：不显示折叠按钮，始终展开表单（T12）。 */
+  embedded?: boolean;
+}
+
+export default function AsrConfigPanel({ embedded = false }: AsrConfigPanelProps) {
+  const [open, setOpen] = useState(embedded);
   const [source, setSource] = useState<AsrConfig["source"]>("local");
   const [cloudEndpoint, setCloudEndpoint] = useState(DEFAULT_CONFIG.cloudEndpoint);
   const [cloudApiKey, setCloudApiKey] = useState("");
@@ -76,16 +81,18 @@ export default function AsrConfigPanel() {
 
   return (
     <div className="asr-config">
-      <button
-        type="button"
-        className="llm-config-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        🎙️ ASR 配置 {open ? "▾" : "▸"}
-      </button>
+      {!embedded && (
+        <button
+          type="button"
+          className="llm-config-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          🎙️ ASR 配置 {open ? "▾" : "▸"}
+        </button>
+      )}
 
-      {open && (
+      {(embedded || open) && (
         <div className="llm-config-form">
           <div className="llm-field">
             <span>识别来源</span>
