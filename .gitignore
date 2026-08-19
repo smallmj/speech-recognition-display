@@ -14,6 +14,10 @@ src-tauri/target/
 src-tauri/.venv/
 src-tauri/asr-models/
 
+# 打包运行时由 scripts/package-runtime.mjs 构建期生成，不进 git
+src-tauri/resources/runtime/venv/
+src-tauri/resources/runtime/sherpa_streaming.py
+
 # 系统文件
 .DS_Store
 

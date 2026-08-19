@@ -17,7 +17,7 @@
 
 use std::collections::VecDeque;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -61,13 +61,13 @@ pub struct SherpaAsr {
 impl SherpaAsr {
     /// 启动 sidecar + 麦克风采集。失败返回错误原因（壳层回退到 mock）。
     pub fn spawn(handle: &AppHandle) -> Result<Self, String> {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let model_dir = Self::resolve_model_dir(manifest)?;
+        let model_dir = Self::resolve_model_dir(handle)?;
         // T5：说话人 speaker embedding 模型（3d-speaker 等）可选；缺失时 SCD 降级为单说话人。
-        let embedding_dir = Self::resolve_embedding_model_dir(manifest);
+        let embedding_dir = Self::resolve_embedding_model_dir(handle);
         let scd_configured = embedding_dir.is_some();
-        let python = manifest.join(".venv/bin/python3");
-        let script = manifest.join("sherpa_streaming.py");
+        let runtime = crate::model_paths::runtime_paths(handle)?;
+        let python = runtime.python;
+        let script = runtime.script;
 
         if !python.is_file() {
             return Err(format!("找不到 sidecar Python：{python:?}（先创建 src-tauri/.venv 并 pip install sherpa-onnx）"));
@@ -169,13 +169,13 @@ impl SherpaAsr {
         })
     }
 
-    /// 解析模型目录：环境变量覆盖 → `asr-models/` 下第一个含 tokens.txt 的目录。
-    fn resolve_model_dir(manifest: &Path) -> Result<PathBuf, String> {
+    /// 解析模型目录：环境变量覆盖 → 模型根目录下第一个含 tokens.txt 的目录。
+    fn resolve_model_dir(handle: &AppHandle) -> Result<PathBuf, String> {
         if let Ok(dir) = std::env::var(MODEL_DIR_ENV) {
             let p = PathBuf::from(dir);
             return if p.is_dir() { Ok(p) } else { Err(format!("{MODEL_DIR_ENV} 指向的目录不存在: {p:?}")) };
         }
-        let root = manifest.join("asr-models");
+        let root = crate::model_paths::model_root(handle)?;
         let mut candidates: Vec<PathBuf> = std::fs::read_dir(&root)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
@@ -198,12 +198,12 @@ impl SherpaAsr {
     /// （sherpa-onnx 生态的 3d-speaker eres2net / wav2vec2 speaker 系列）。
     /// 找不到返回 `None` —— 不传 `--embedding-model-dir`，sidecar 不加载
     /// speaker embedding 模型，SCD 降级为单说话人。
-    fn resolve_embedding_model_dir(manifest: &Path) -> Option<PathBuf> {
+    fn resolve_embedding_model_dir(handle: &AppHandle) -> Option<PathBuf> {
         if let Ok(dir) = std::env::var(EMBEDDING_MODEL_DIR_ENV) {
             let p = PathBuf::from(dir);
             return if p.is_dir() { Some(p) } else { None };
         }
-        let root = manifest.join("asr-models");
+        let root = crate::model_paths::model_root(handle).ok()?;
         let mut candidates: Vec<PathBuf> = std::fs::read_dir(&root)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
