@@ -105,7 +105,8 @@ pub enum EngineEvent {
         color: String,
         gender: Gender,
     },
-    /// LLM 整理结果的流式增量（SSE 每个 delta），前端据此逐字填充整理版。
+    /// LLM 整理请求仍在进行中的信号（SSE delta 累积结果）。前端保留原文，
+    /// 只用该事件标记「整理中」，最终结果到达后才切换展示。
     /// 由壳层在 SSE 过程中 emit（engine 只定义类型与序列化契约，不产生该事件）。
     ///
     /// `edit_id` 与同请求的 [`EngineEvent::SegmentCleaned`] 一致（同一流式
@@ -122,6 +123,13 @@ pub enum EngineEvent {
     #[serde(rename_all = "camelCase")]
     SegmentCleaned {
         segment_id: u64,
+        cleaned: String,
+        edit_id: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    SegmentsCleaned {
+        /// 同一次 LLM 请求覆盖的片段批次（同一说话人的全部未整理片段）。
+        segment_ids: Vec<u64>,
         cleaned: String,
         edit_id: u64,
     },
@@ -157,7 +165,7 @@ pub trait LlmPort: Send {
     fn cleanup(&self, text: &str) -> String;
 
     /// 流式整理：`on_partial` 每次收到**截至当前**的累积整理文本时被调用
-    /// （前端据此逐字填充），成功返回最终整理结果。
+    /// （前端据此标记整理中），成功返回最终整理结果。
     ///
     /// 默认实现走 [Self::cleanup] 一次性回调（mock 与同步端口无需覆盖）；
     /// 真实流式 LLM（SSE）实现覆盖本方法，把每个 delta 累积后回调。

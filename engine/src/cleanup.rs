@@ -8,6 +8,7 @@
 //!   上次节奏触发 `rhythm_duration`（默认 5s，可配 10s），即触发一次整理。
 //! - **单在途**：同一时刻最多一个整理请求（`in_flight`/`pending`），防 LLM 请求打爆与乱序。
 //! - **editId 校验**：`apply_cleanup` 只接受严格更大的 `edit_id`，旧结果/乱序到达被拒绝。
+//! - **整理中保留原文**：流式增量只作为状态信号；最终批次结果到达后才切换展示。
 //! - **失败回退**：LLM 失败置 `status = Failed`，前端展示原文。
 //!
 //! 时间模型：**逻辑时钟** —— 一切时刻是从管道创建起算的单调 [`Duration`]。
@@ -39,7 +40,9 @@ pub struct SegmentStore {
 
 impl SegmentStore {
     pub fn new() -> Self {
-        Self { segments: Vec::new() }
+        Self {
+            segments: Vec::new(),
+        }
     }
 
     /// 追加一条新片段。**原文只写一次**：调用方保证 `segment.raw` 之后不再变化，
@@ -50,7 +53,10 @@ impl SegmentStore {
 
     /// 冻结最老的 `Active` 片段，返回其 id；没有可冻结的返回 `None`。
     pub fn freeze_oldest_active(&mut self) -> Option<u64> {
-        let idx = self.segments.iter().position(|s| s.status == SegmentStatus::Active)?;
+        let idx = self
+            .segments
+            .iter()
+            .position(|s| s.status == SegmentStatus::Active)?;
         self.segments[idx].status = SegmentStatus::Frozen;
         Some(self.segments[idx].id)
     }
@@ -69,12 +75,17 @@ impl SegmentStore {
 
     /// 所有已冻结但尚未整理的片段（只读）。
     pub fn get_frozen_uncleaned(&self) -> Vec<&Segment> {
-        self.segments.iter().filter(|s| s.status == SegmentStatus::Frozen).collect()
+        self.segments
+            .iter()
+            .filter(|s| s.status == SegmentStatus::Frozen)
+            .collect()
     }
 
     /// 最老的已冻结未整理片段（只读）。
     pub fn next_frozen_uncleaned(&self) -> Option<&Segment> {
-        self.segments.iter().find(|s| s.status == SegmentStatus::Frozen)
+        self.segments
+            .iter()
+            .find(|s| s.status == SegmentStatus::Frozen)
     }
 
     /// 应用一次整理结果。**editId 校验**：只接受严格大于现有 `edit_id` 的结果，
@@ -196,10 +207,15 @@ impl CleanupScheduler {
 /// 一次在途整理请求（单在途：同一时刻至多一个）。
 #[derive(Debug, Clone)]
 pub struct PendingCleanup {
+    /// 批次主片段：同一说话人未整理片段中的最新一条，用于流式占位事件。
     pub segment_id: u64,
+    /// 本批次覆盖的全部片段（同一说话人、已冻结、未整理，按 id 升序）。
+    pub segment_ids: Vec<u64>,
+    /// 本批次说话人。
+    pub speaker_id: u32,
     /// 本次请求预分配的 editId（全局单调）。
     pub edit_id: u64,
-    /// 待整理的不可变原文。
+    /// 本批次汇整后的待整理原文。
     pub raw: String,
 }
 
@@ -225,7 +241,11 @@ pub struct CleanupPipeline {
 }
 
 impl CleanupPipeline {
-    pub fn new(debounce_duration: Duration, rhythm_duration: Duration, llm: Box<dyn LlmPort>) -> Self {
+    pub fn new(
+        debounce_duration: Duration,
+        rhythm_duration: Duration,
+        llm: Box<dyn LlmPort>,
+    ) -> Self {
         Self {
             store: SegmentStore::new(),
             scheduler: CleanupScheduler::new(debounce_duration, rhythm_duration),
@@ -273,21 +293,42 @@ impl CleanupPipeline {
         true
     }
 
-    /// 派发下一个待整理片段（单在途：已在途则不派发）。返回是否派发。
+    /// 派发下一个待整理批次（单在途：已在途则不派发）。返回是否派发。
+    ///
+    /// 批次规则：取最老已冻结未整理片段的说话人，把**该说话人所有**
+    /// 已冻结未整理片段按 id 升序汇整成一个请求。其他说话人的片段保持
+    /// Frozen，等待下一个批次，避免不同人的内容被混进同一次整理。
     fn dispatch_next(&mut self) -> bool {
         if self.scheduler.is_in_flight() || self.pending.is_some() {
             return false;
         }
-        let Some(seg) = self.store.next_frozen_uncleaned().map(|s| s.clone()) else {
+        let Some(primary) = self.store.next_frozen_uncleaned().map(|s| s.clone()) else {
             return false;
         };
+        let batch: Vec<Segment> = self
+            .store
+            .get_frozen_uncleaned()
+            .into_iter()
+            .filter(|seg| seg.speaker_id == primary.speaker_id)
+            .cloned()
+            .collect();
+        let Some(latest) = batch.last() else {
+            return false;
+        };
+        let raw = batch
+            .iter()
+            .map(|seg| seg.raw.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         let edit_id = self.next_edit_id;
         self.next_edit_id += 1;
         self.scheduler.set_in_flight(true);
         self.pending = Some(PendingCleanup {
-            segment_id: seg.id,
+            segment_id: latest.id,
+            segment_ids: batch.iter().map(|seg| seg.id).collect(),
+            speaker_id: primary.speaker_id,
             edit_id,
-            raw: seg.raw.clone(),
+            raw,
         });
         true
     }
@@ -316,7 +357,9 @@ impl CleanupPipeline {
         };
         self.scheduler.set_in_flight(false);
         let cleaned = self.llm.cleanup(&p.raw);
-        self.apply_cleanup_result(p.segment_id, cleaned, p.edit_id)
+        let segment_ids = p.segment_ids.clone();
+        let edit_id = p.edit_id;
+        self.apply_cleanup_result(&segment_ids, cleaned, edit_id)
     }
 
     /// 失败路径：LLM 出错时调用，置 `Failed` 回退原文，产出 `CleanupFailed`。
@@ -325,11 +368,13 @@ impl CleanupPipeline {
             return Vec::new();
         };
         self.scheduler.set_in_flight(false);
-        if self.store.mark_failed(p.segment_id) {
-            vec![EngineEvent::CleanupFailed { segment_id: p.segment_id }]
-        } else {
-            Vec::new()
+        let mut events = Vec::new();
+        for segment_id in p.segment_ids {
+            if self.store.mark_failed(segment_id) {
+                events.push(EngineEvent::CleanupFailed { segment_id });
+            }
         }
+        events
     }
 
     /// 应用一次外部 LLM 整理结果（异步场景经此回填）。editId 校验由
@@ -339,13 +384,40 @@ impl CleanupPipeline {
     /// （清 `pending` 与单在途标志）——否则异步成功路径会残留在途状态，
     /// 驱动线程将无限重复处理同一条 pending（T9 遗留缺口，见测试
     /// `async_apply_cleanup_result_releases_in_flight_and_pending`）。
-    pub fn apply_cleanup_result(&mut self, segment_id: u64, cleaned: String, edit_id: u64) -> Vec<EngineEvent> {
-        self.pending.take();
+    pub fn apply_cleanup_result(
+        &mut self,
+        segment_ids: &[u64],
+        cleaned: String,
+        edit_id: u64,
+    ) -> Vec<EngineEvent> {
+        // 异步调用方会先 clone pending 再请求 LLM；这里按 editId 清掉匹配的
+        // 在途状态。同步路径已在 run_pending_with_llm 中 take，这里自然跳过。
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.edit_id == edit_id)
+        {
+            self.pending.take();
+        }
         self.scheduler.set_in_flight(false);
-        if self.store.apply_cleanup(segment_id, cleaned.clone(), edit_id) {
-            vec![EngineEvent::SegmentCleaned { segment_id, cleaned, edit_id }]
-        } else {
+
+        let mut applied_ids = Vec::new();
+        for &segment_id in segment_ids {
+            if self
+                .store
+                .apply_cleanup(segment_id, cleaned.clone(), edit_id)
+            {
+                applied_ids.push(segment_id);
+            }
+        }
+        if applied_ids.is_empty() {
             Vec::new()
+        } else {
+            vec![EngineEvent::SegmentsCleaned {
+                segment_ids: applied_ids,
+                cleaned,
+                edit_id,
+            }]
         }
     }
 
@@ -435,7 +507,9 @@ mod tests {
 
         // 触发并完成整理
         let events = p.step(secs(3)); // 防抖 2s 已过
-        assert!(events.iter().any(|e| matches!(e, EngineEvent::SegmentCleaned { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::SegmentsCleaned { .. })));
 
         let seg = p.store().get(0).expect("segment 0 exists");
         // raw 不可变：整理前后一字未改
@@ -451,7 +525,11 @@ mod tests {
         p.append(secs(0), 1, "还在说话中".to_string());
 
         // 防抖窗口内多次 tick：不触发、不冻结、不派发、无整理事件
-        for t in [Duration::from_millis(500), secs(1), Duration::from_millis(1500)] {
+        for t in [
+            Duration::from_millis(500),
+            secs(1),
+            Duration::from_millis(1500),
+        ] {
             assert!(!p.tick(t), "t={t:?} 不应触发");
         }
         assert!(!p.has_pending());
@@ -461,6 +539,59 @@ mod tests {
         // step 在窗口内也不应产出任何清理事件（interim 不送 LLM）
         let events = p.step(Duration::from_millis(1500));
         assert!(events.is_empty());
+    }
+
+    /// 回归：同一次整理必须把同一说话人所有已冻结未整理片段合并成一个请求。
+    ///
+    /// 用户反馈：现在每条 ASR final 单独整理，导致同一人的连续语义被拆碎。
+    /// 正确行为是以“说话人 + 未整理”为批次，而不是以单条 segment 为批次。
+    #[test]
+    fn pending_cleanup_groups_same_speaker_uncleaned_segments() {
+        let mut p = mock_pipeline();
+        p.append(secs(0), 1, "第一句".to_string());
+        p.append(secs(1), 2, "别人插入".to_string());
+        p.append(secs(2), 1, "第三句".to_string());
+
+        assert!(p.tick(secs(4)), "防抖到期应触发整理");
+        let pending = p.pending().expect("应产生整理请求");
+        assert_eq!(pending.segment_id, 2, "批次主片段应为该说话人最新片段");
+        assert_eq!(
+            pending.raw, "第一句\n第三句",
+            "同一说话人的未整理原文必须汇整后送 LLM"
+        );
+        assert_eq!(
+            p.store().get(1).map(|s| s.status),
+            Some(SegmentStatus::Frozen),
+            "其他说话人的片段不应混入本批次"
+        );
+
+        let events = p.run_pending_with_llm();
+        assert!(matches!(
+            events.as_slice(),
+            [EngineEvent::SegmentsCleaned { segment_ids, edit_id, .. }]
+                if segment_ids == &[0, 2] && *edit_id == 0
+        ));
+        assert_eq!(p.store().get(0).unwrap().status, SegmentStatus::Cleaned);
+        assert_eq!(p.store().get(2).unwrap().status, SegmentStatus::Cleaned);
+        assert_eq!(
+            p.store().get(0).unwrap().cleaned,
+            p.store().get(2).unwrap().cleaned
+        );
+    }
+
+    /// 回归：LLM 在途整理期间，新识别文字仍可无条件追加并实时可见。
+    #[test]
+    fn pending_does_not_block_new_utterance_append() {
+        let mut p = mock_pipeline();
+        p.append(secs(0), 1, "正在整理的一段".to_string());
+        assert!(p.tick(secs(2))); // 触发并进入在途
+
+        // 整理未完成时继续说话：新 final 必须照常进入片段存储（Active）。
+        p.append(secs(3), 1, "整理期间新识别的一句话".to_string());
+        assert_eq!(p.store().len(), 2, "在途期间追加不得被丢弃或延迟");
+        let seg = p.store().get(1).unwrap();
+        assert_eq!(seg.raw, "整理期间新识别的一句话");
+        assert_eq!(seg.status, SegmentStatus::Active, "新片段保持 Active，不参与在途批次");
     }
 
     #[test]
@@ -474,8 +605,9 @@ mod tests {
         assert_eq!(p.store().get(0).unwrap().status, SegmentStatus::Frozen);
         assert_eq!(p.store().get(1).unwrap().status, SegmentStatus::Frozen);
         assert!(p.has_pending());
-        assert_eq!(p.pending().unwrap().segment_id, 0);
-        assert_eq!(p.pending().unwrap().raw, "第一段");
+        assert_eq!(p.pending().unwrap().segment_id, 1);
+        assert_eq!(p.pending().unwrap().segment_ids, vec![0, 1]);
+        assert_eq!(p.pending().unwrap().raw, "第一段\n第二段");
 
         // 此刻新追加一条 active：不得被派发（interim 不送 LLM）
         p.append(secs(3), 1, "还在说".to_string());
@@ -550,22 +682,26 @@ mod tests {
         for t in 0..3 {
             p.append(secs(t), 1, format!("段{t}"));
         }
-        // t=5s 节奏触发 → 冻结全部，派发 1 条（在途片段在 store 中仍为 Frozen，
-        // 直到整理结果落库才变 Cleaned）
+        // t=5s 节奏触发 -> 冻结全部；同一说话人 3 条汇成一个批次
         assert!(p.tick(secs(5)));
         assert_eq!(p.store().get_frozen_uncleaned().len(), 3, "3 条全部冻结");
         assert!(p.has_pending());
-        assert_eq!(p.pending().unwrap().segment_id, 0);
+        assert_eq!(p.pending().unwrap().segment_id, 2);
+        assert_eq!(p.pending().unwrap().segment_ids, vec![0, 1, 2]);
 
         // 在途未完成时：再过多久都不触发新一轮、不派发新请求
         assert!(!p.tick(secs(20)), "在途时应封锁触发");
         assert!(!p.tick(secs(100)));
-        assert_eq!(p.pending().unwrap().segment_id, 0, "在途请求不得被替换");
+        assert_eq!(p.pending().unwrap().segment_id, 2, "在途请求不得被替换");
 
-        // 完成在途 → 解锁，下一轮才派发第二条
+        // 完成在途批次 -> 3 条全部落库，且不再残留该 speaker 的旧片段
         p.run_pending_with_llm();
-        assert!(p.tick(secs(20)));
-        assert_eq!(p.pending().unwrap().segment_id, 1);
+        assert!(!p.has_pending());
+        assert!(p
+            .store()
+            .segments()
+            .iter()
+            .all(|s| s.status == SegmentStatus::Cleaned));
     }
 
     // ---- 验收：editId 校验 / 乱序 ----
@@ -579,16 +715,19 @@ mod tests {
         p.append(secs(0), 1, "异步整理".to_string());
         assert!(p.tick(secs(3)));
         assert!(p.has_pending());
-        let (pid, eid) = (p.pending().unwrap().segment_id, p.pending().unwrap().edit_id);
+        let (pid, eid) = (
+            p.pending().unwrap().segment_id,
+            p.pending().unwrap().edit_id,
+        );
 
-        // 异步成功路径：应用结果 → 产出 SegmentCleaned，且必须清 pending 并解锁单在途
-        let events = p.apply_cleanup_result(pid, "整理完成".into(), eid);
-        assert!(events.iter().any(|e| matches!(e, EngineEvent::SegmentCleaned { segment_id, .. } if *segment_id == pid)));
+        // 异步成功路径：应用结果 -> 产出 SegmentsCleaned，且必须清 pending 并解锁单在途
+        let events = p.apply_cleanup_result(&[pid], "整理完成".into(), eid);
+        assert!(events.iter().any(|e| matches!(e, EngineEvent::SegmentsCleaned { segment_ids, .. } if segment_ids.contains(&pid))));
         assert!(!p.has_pending(), "成功路径必须清 pending");
         assert!(!p.scheduler().is_in_flight(), "成功路径必须解锁单在途");
         assert_eq!(p.store().get(pid).unwrap().status, SegmentStatus::Cleaned);
 
-        // 解锁后可继续派发下一条
+        // 解锁后可继续派发新片段
         p.append(secs(3), 1, "第二条".to_string());
         assert!(p.tick(secs(20)));
         assert!(p.has_pending());
@@ -676,7 +815,9 @@ mod tests {
 
         // LLM 失败：fail_pending → CleanupFailed，status=Failed，cleaned 保持 None（展示原文）
         let events = p.fail_pending();
-        assert!(events.iter().any(|e| matches!(e, EngineEvent::CleanupFailed { segment_id: 0 })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::CleanupFailed { segment_id: 0 })));
         let seg = p.store().get(0).unwrap();
         assert_eq!(seg.status, SegmentStatus::Failed);
         assert!(seg.cleaned.is_none());
@@ -701,24 +842,31 @@ mod tests {
         let cleaned_events: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                EngineEvent::SegmentCleaned { segment_id, cleaned, edit_id } => {
-                    Some((*segment_id, cleaned.clone(), *edit_id))
-                }
+                EngineEvent::SegmentsCleaned {
+                    segment_ids,
+                    cleaned,
+                    edit_id,
+                } => Some((segment_ids.clone(), cleaned.clone(), *edit_id)),
                 _ => None,
             })
             .collect();
 
-        // 两条都被整理，editId 单调递增
-        assert_eq!(cleaned_events.len(), 2);
-        let ids: Vec<u64> = cleaned_events.iter().map(|(_, _, e)| *e).collect();
-        assert_eq!(ids, vec![0, 1], "editId 单调递增");
-        let seg_ids: Vec<u64> = cleaned_events.iter().map(|(s, _, _)| *s).collect();
-        assert_eq!(seg_ids, vec![0, 1], "按追加顺序整理，不乱序");
+        // 同一说话人两条原文作为一个批次整理，且 editId 全局单调
+        assert_eq!(cleaned_events.len(), 1);
+        assert_eq!(cleaned_events[0].0, vec![0, 1], "批次覆盖两条片段");
+        assert_eq!(cleaned_events[0].2, 0, "第一批 editId");
 
-        // 状态与内容落库
+        // 状态与内容落库：两个片段共享同一次整理结果
         assert_eq!(p.store().get(0).unwrap().status, SegmentStatus::Cleaned);
-        assert_eq!(p.store().get(0).unwrap().cleaned.as_deref(), Some("第一句话。"));
-        assert_eq!(p.store().get(1).unwrap().cleaned.as_deref(), Some("第二句话。"));
+        assert_eq!(p.store().get(1).unwrap().status, SegmentStatus::Cleaned);
+        assert_eq!(
+            p.store().get(0).unwrap().cleaned.as_deref(),
+            Some("第一句话 第二句话。")
+        );
+        assert_eq!(
+            p.store().get(1).unwrap().cleaned,
+            p.store().get(0).unwrap().cleaned
+        );
     }
 
     #[test]
@@ -727,6 +875,9 @@ mod tests {
         assert_eq!(llm.cleanup("  你好 世界 "), "你好 世界。");
         assert_eq!(llm.cleanup("已经说完。"), "已经说完。");
         assert_eq!(llm.cleanup("   "), "");
-        assert_eq!(llm.summarize(&["a".into(), "b".into()]), "要点：a；b（共 2 段）");
+        assert_eq!(
+            llm.summarize(&["a".into(), "b".into()]),
+            "要点：a；b（共 2 段）"
+        );
     }
 }

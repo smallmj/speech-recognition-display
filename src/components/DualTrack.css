@@ -265,56 +265,6 @@
   border-color: rgba(250, 204, 21, 0.4);
 }
 
-/* 流式整理中（T9：收到 segmentCleaning 增量时） */
-.dual-badge.is-streaming {
-  background: rgba(79, 140, 255, 0.14);
-  color: #2f6fe4;
-  border-color: rgba(79, 140, 255, 0.45);
-}
-
-/* 流式增量文本：与整理版同底色，末尾闪烁光标提示"仍在生成" */
-.dual-partial {
-  opacity: 0.92;
-}
-
-.dual-caret {
-  display: inline-block;
-  color: #2f6fe4;
-  font-weight: 700;
-  animation: dual-caret-blink 1s steps(1) infinite;
-}
-
-@keyframes dual-caret-blink {
-  0%,
-  55% {
-    opacity: 1;
-  }
-  56%,
-  100% {
-    opacity: 0;
-  }
-}
-
-.dual-badge.is-failed {
-  background: rgba(255, 59, 48, 0.12);
-  color: #d43a30;
-  border-color: rgba(255, 59, 48, 0.4);
-}
-
-/* 片段文字 —— 字号/字体/颜色由 CSS 变量控制（T3 displaySettings 即时生效，
-   与 BubbleFlow 的 .bubble-text 同一套变量），其余样式保持双轨视觉。 */
-.dual-text {
-  padding: 9px 14px;
-  border-radius: 12px;
-  border-left: 3px solid transparent;
-  font-size: var(--bubble-font-size, 15px);
-  font-family: var(--bubble-font-family, inherit);
-  color: var(--bubble-text-color, inherit);
-  line-height: 1.55;
-  word-break: break-word;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-}
-
 /* 原文/占位模式：视觉上区别于整理版，便于一眼分辨两轨 */
 .dual-text.is-raw {
   opacity: 0.82;
