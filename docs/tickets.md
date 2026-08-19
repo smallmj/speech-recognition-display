@@ -13,7 +13,7 @@
 | T6 | [#7](https://github.com/smallmj/speech-recognition-display/issues/7) | 手动命名与头像管理 | T5 | ready-for-agent |
 | T7 | [#8](https://github.com/smallmj/speech-recognition-display/issues/8) | 云端 ASR 可切换 | T4 | ready-for-agent |
 | T8 | [#9](https://github.com/smallmj/speech-recognition-display/issues/9) | LLM 整理管线（间隔 + 双轨 + 高亮） | T2 | ✅ 已完成 (835ec12) |
-| T9 | [#10](https://github.com/smallmj/speech-recognition-display/issues/10) | 真实 LLM 接入（OpenAI 兼容 + SSE + 重试） | T8 | ready-for-agent |
+| T9 | [#10](https://github.com/smallmj/speech-recognition-display/issues/10) | 真实 LLM 接入（OpenAI 兼容 + SSE + 重试） | T8 | ✅ 已合并 (PR #15) |
 | T10 | [#11](https://github.com/smallmj/speech-recognition-display/issues/11) | 会议纪要（停止后分批汇总） | T9 | ready-for-agent |
 | T11 | [#12](https://github.com/smallmj/speech-recognition-display/issues/12) | 会话历史与导出 | T10 | ready-for-agent |
 | T12 | [#13](https://github.com/smallmj/speech-recognition-display/issues/13) | 设置系统（标签页 + 操作提示 + 持久化） | T3, T7, T9, T11 | ready-for-agent |
