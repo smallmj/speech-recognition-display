@@ -289,8 +289,10 @@ def run_streaming(stdin, model_dir: str, sample_rate: int, embedding_model_dir: 
     bytes_per_sample = 4  # float32
     buf = b""
     last_partial = ""
-    # 自上次 final 以来喂入的音频（用于给该 final 段提取 speaker embedding，
-    # 端点判定含尾静音，由 trim_trailing_silence 裁掉；reset 后重新累积下一段）。
+    # 自上次 final/reset 以来喂入的音频（用于给该 final 段提取 speaker embedding）。
+    # 边界说明：领先沿干净——stream 在上次 final 时已 reset，此处只累积该句音频；
+    # 尾沿含端点判定附带的静音，由 trim_trailing_silence 裁掉。chunk 粒度 100ms，
+    # 句边界为近似，embedding 用「该句自 reset 以来的全部音频」是合理近似。
     seg_samples: list[np.ndarray] = []
 
     while True:

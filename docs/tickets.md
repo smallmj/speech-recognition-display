@@ -9,7 +9,7 @@
 | T2 | [#3](https://github.com/smallmj/speech-recognition-display/issues/3) | 冒烟管线：合成转写 → 气泡流 | T1 | ✅ 已完成 (835ec12) |
 | T3 | [#4](https://github.com/smallmj/speech-recognition-display/issues/4) | 显示定制：主题 + 置顶大字模式 + 文字样式 | T2 | ✅ 已完成 (916ca17) |
 | T4 | [#5](https://github.com/smallmj/speech-recognition-display/issues/5) | 真实麦克风 + 本地流式 ASR（sherpa-onnx） | T2 | ✅ 已完成 (6a51aef) |
-| T5 | [#6](https://github.com/smallmj/speech-recognition-display/issues/6) | 说话人切换检测（SCD） | T4 | ✅ 已完成 (1524118) |
+| T5 | [#6](https://github.com/smallmj/speech-recognition-display/issues/6) | 说话人切换检测（SCD） | T4 | ✅ 已完成 (PR #16) |
 | T6 | [#7](https://github.com/smallmj/speech-recognition-display/issues/7) | 手动命名与头像管理 | T5 | ready-for-agent |
 | T7 | [#8](https://github.com/smallmj/speech-recognition-display/issues/8) | 云端 ASR 可切换 | T4 | ready-for-agent |
 | T8 | [#9](https://github.com/smallmj/speech-recognition-display/issues/9) | LLM 整理管线（间隔 + 双轨 + 高亮） | T2 | ✅ 已完成 (835ec12) |

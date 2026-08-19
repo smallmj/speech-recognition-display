@@ -19,7 +19,7 @@
 | `src-tauri/src/asr.rs` | `SherpaAsr` 的 stdout 读线程持有 `Arc<Mutex<Scd>>`；`read_stdout` 在 final 解析点做双轨判定：带 `embedding` → SCD 余弦匹配（speaker_id/gender/is_new 全部来自 SCD）；无 embedding → 降级单说话人（speaker_id=1，注释明确）；新增 speaker embedding 模型目录解析（`SHERPA_EMBEDDING_MODEL_DIR` 环境变量或 `asr-models/` 自动探测）与 `scd_configured`/`scd_embedding_active` 状态 |
 | `src-tauri/src/pipeline.rs` | 真实 ASR 路径日志区分 SCD 模式（speaker embedding 模型已配置/已确认加载 vs 降级单说话人）；模块注释说明 T5 接线位置 |
 | `src-tauri/sherpa_streaming.py` | 新增 `--embedding-model-dir`（可选）：加载 sherpa-onnx speaker embedding 提取器（3d-speaker 等），对每个 final 段音频（截尾静音后）提取 speaker embedding，在 `final` 事件附 `embedding` 字段；`started` 事件上报 `scd_embedding` 是否可用；模型缺失/加载失败全部优雅降级 |
-| `src/components/BubbleFlow.tsx` | 显式处理 `isNewSpeaker`：已登记说话人绝不覆盖（颜色/头像长会话稳定，规格用户故事 37），未登记才创建条目（标记缺失时兜底创建，避免灰色占位） |
+| （前端） | **无改动**：`isNewSpeaker` 的渲染处理（已登记说话人不覆盖 → 颜色/头像长会话稳定，规格用户故事 37）为 T2/T9 既有逻辑（`DualTrackView` 的 `reconcileSpeakerColors`/`reconcileSegments`）；T5 仅在 engine 层填充 `Utterance.is_new_speaker` 并随 `SpeakerAssigned` 事件透传 |
 
 ## 二、验收标准逐条对照
 
