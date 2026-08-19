@@ -248,7 +248,7 @@ export default function App() {
             {asrMode === "sherpa"
               ? "本地 ASR（sherpa-onnx）"
               : asrMode === "cloud"
-                  ? "云端 ASR（流式）"
+                ? "云端 ASR（流式）"
                 : asrMode === "mock"
                   ? "演示模式（合成转写）"
                   : "ASR 初始化中…"}
