@@ -24,6 +24,8 @@ import { useMemo, useState } from "react";
 import { useEffect } from "react";
 import { ENGINE_EVENT, type EngineEvent, type Segment } from "../engineEvents";
 import { subscribe } from "../tauriEvent";
+import { profileOf, useSpeakerProfiles } from "../speakerProfiles";
+import SpeakerBadge from "./SpeakerBadge";
 import { diffHighlight } from "./diff";
 import "./DualTrack.css";
 
@@ -174,6 +176,7 @@ export default function DualTrackView({
   onIntervalChange,
 }: DualTrackViewProps) {
   const [mode, setMode] = useState<DisplayMode>("cleaned");
+  const { profiles, renameSpeaker, setSpeakerAvatar, randomAvatar } = useSpeakerProfiles();
 
   const segments = useMemo(() => reduceEvents(events), [events]);
   const speakerColors = useMemo(() => reduceSpeakerColors(events), [events]);
@@ -231,9 +234,14 @@ export default function DualTrackView({
           return (
             <div className="dual-row" key={seg.id}>
               <div className="dual-meta">
-                <span className="dual-speaker" style={{ color }}>
-                  说话人 {seg.speakerId}
-                </span>
+                <SpeakerBadge
+                  speakerId={seg.speakerId}
+                  color={color}
+                  profile={profileOf(profiles, seg.speakerId)}
+                  onRename={renameSpeaker}
+                  onSetAvatar={setSpeakerAvatar}
+                  onRandomAvatar={randomAvatar}
+                />
                 {segMode === "partial" && (
                   <span className="dual-badge is-streaming">整理中 · 流式…</span>
                 )}
