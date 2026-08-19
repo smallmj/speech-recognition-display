@@ -25,3 +25,8 @@ rubato = "0.15"
 # 锁定 ~2.11：2.11 起设置 header 用 Request::set（2.10 及更早用 header），
 # 锁定已验证的 API 形状。
 ureq = { version = "~2.11", features = ["json"] }
+# 云端流式 ASR（T7）：Deepgram 兼容 WebSocket。blocking engine 侧仍通过
+# AsrPort 拉取结果，网络细节隔离在壳层。
+futures-util = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }

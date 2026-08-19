@@ -13,9 +13,11 @@
 //! （[crate::llm::load_llm_config] / [crate::llm::save_llm_config]）
 //! 与模型列表命令（[crate::llm::list_llm_models]）。
 
-pub mod audio;
 mod asr;
+mod asr_config;
+pub mod audio;
 mod bridge;
+mod cloud_asr;
 mod llm;
 mod pipeline;
 
@@ -39,7 +41,9 @@ pub fn run() {
             ping_ack,
             llm::load_llm_config,
             llm::save_llm_config,
-            llm::list_llm_models
+            llm::list_llm_models,
+            asr_config::load_asr_config,
+            asr_config::save_asr_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

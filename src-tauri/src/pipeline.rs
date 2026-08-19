@@ -1,11 +1,11 @@
 //! 把 engine 事件流桥接到 Tauri 前端（`engine://event`）。
 //!
-//! 接线策略（T4 + T9 整合）：
-//! - **真实 ASR 优先（T4）**：尝试启动 sherpa-onnx sidecar + 麦克风
-//!   （[crate::asr::SherpaAsr]）；成功则真实识别结果进入整理链路，
-//!   partial 实时 publish 给前端状态行；失败回退
-//!   [engine::MockAsrPort]（合成转写），保证演示模式始终可用。
-//!   模式经 `engine://status` 事件告知前端（`{"mode":"sherpa"|"mock"}`）。
+//! 接线策略（T4 + T7 + T9 整合）：
+//! - **ASR 可配置（T7）**：按 `asr-config.json` 启动本地 sherpa-onnx 或云端
+//!   Deepgram 兼容 WebSocket；驱动线程每秒重读配置，来源变化时只替换 ASR
+//!   端口，不重建整理管线/说话人状态，切换对字幕链路保持无缝。本地失败回退
+//!   mock；云端失败回退本地，再失败回退 mock。模式经 `engine://status`
+//!   事件告知前端（`{"mode":"sherpa"|"cloud"|"mock"}`）。
 //! - **final 统一进整理管线（T9）**：无论真实还是合成，final 转写都直接喂入
 //!   [engine::CleanupPipeline]（防抖 + 固定节奏 + 单在途），驱动线程周期
 //!   `tick(now)` 冻结并派发 `pending`，拿到 pending 后调真实 OpenAI 兼容
@@ -38,6 +38,8 @@ use engine::{AsrPort, CleanupPipeline, EngineEvent, MockAsrPort, MockLlmPort};
 use tauri::{AppHandle, Emitter};
 
 use crate::asr::SherpaAsr;
+use crate::asr_config::{self, AsrConfig, AsrSource};
+use crate::cloud_asr::CloudAsr;
 use crate::llm::{self, OpenAiLlmClient};
 
 /// engine 事件流的事件名（与前端 `src/engineEvents.ts` 的 `ENGINE_EVENT` 保持一致）。
@@ -49,17 +51,122 @@ pub const STATUS_EVENT: &str = "engine://status";
 /// 整理管线的防抖（2s）/固定节奏（5s）不受节拍影响。
 const TICK_INTERVAL: Duration = Duration::from_millis(200);
 
+/// ASR 配置轮询间隔（5 个 tick = 1s）。保存配置后无需重启应用。
+const ASR_CONFIG_POLL_TICKS: u32 = 5;
+
 /// ASR 数据源模式（决定追加节奏与 partial 是否可用）。
 enum AsrMode {
-    /// 真实 ASR（sherpa-onnx + 麦克风）：partial 实时 publish，final 全部
+    /// 本地 ASR（sherpa-onnx + 麦克风）：partial 实时 publish，final 全部
     /// 无条件追加（不丢字）。
-    Sherpa {
+    Local {
         /// 实时 partial 缓冲（sidecar stdout 线程写入，本循环轮询）。
         partials: Arc<Mutex<VecDeque<String>>>,
     },
+    /// 云端 ASR（Deepgram 兼容 WebSocket）：同样 partial 实时 publish，
+    /// final 全部无条件追加（不丢字）。
+    Cloud {
+        /// 实时 partial 缓冲（WebSocket 任务写入，本循环轮询）。
+        partials: Arc<Mutex<VecDeque<String>>>,
+    },
     /// 回退演示模式（合成转写）：无 partial，1 进 1 出节奏（便于观察
-    /// 「追加 → 防抖 → 流式整理 → 完成」的完整过程）。
+    /// 「追加 -> 防抖 -> 流式整理 -> 完成」的完整过程）。
     Mock,
+}
+
+impl AsrMode {
+    fn status_name(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "sherpa",
+            Self::Cloud { .. } => "cloud",
+            Self::Mock => "mock",
+        }
+    }
+}
+
+fn emit_asr_status(handle: &AppHandle, mode: &str, reason: Option<String>) {
+    let payload = match reason {
+        Some(reason) => serde_json::json!({ "mode": mode, "reason": reason }),
+        None => serde_json::json!({ "mode": mode }),
+    };
+    let _ = handle.emit(STATUS_EVENT, payload);
+}
+
+/// 按配置启动 ASR 端口。只负责启动，不承担降级策略。
+fn start_asr(config: &AsrConfig) -> Result<(Box<dyn AsrPort>, AsrMode), String> {
+    match config.effective_source() {
+        AsrSource::Local => {
+            let real = SherpaAsr::spawn()?;
+            println!("[engine] 本地 ASR 已启动（sherpa-onnx + 麦克风）");
+            if real.scd_configured() {
+                println!(
+                    "[engine] SCD: speaker embedding 模型已配置{}",
+                    if real.scd_embedding_active() {
+                        "，sidecar 已确认加载（embedding 余弦匹配生效）"
+                    } else {
+                        "（等待 sidecar 确认加载…）"
+                    }
+                );
+            } else {
+                println!(
+                    "[engine] SCD: 未配置 speaker embedding 模型，降级为单说话人（全部归说话人 1）"
+                );
+            }
+            let partials = real.partials_handle();
+            Ok((Box::new(real), AsrMode::Local { partials }))
+        }
+        AsrSource::Cloud => {
+            let real = CloudAsr::spawn(config.clone())?;
+            println!("[engine] 云端 ASR 已启动（Deepgram 兼容流式接口）");
+            let partials = real.partials_handle();
+            Ok((Box::new(real), AsrMode::Cloud { partials }))
+        }
+    }
+}
+
+/// 是否需要热切换 ASR：
+/// - 来源变化必须切换；
+/// - 云端已生效且任意云端配置变化时重连；
+/// - 云端曾尝试失败并回退本地后，用户修正云端配置也允许重试。
+fn should_switch_asr(
+    next_source: AsrSource,
+    active_source: AsrSource,
+    last_attempted_source: AsrSource,
+) -> bool {
+    next_source != last_attempted_source
+        || (next_source == AsrSource::Cloud
+            && (active_source == AsrSource::Cloud || last_attempted_source == AsrSource::Cloud))
+}
+
+/// 启动目标 ASR；失败时按「云端 -> 本地 -> mock」「本地 -> mock」降级。
+fn start_asr_with_fallback(
+    handle: &AppHandle,
+    config: &AsrConfig,
+) -> (Box<dyn AsrPort>, AsrMode, AsrSource) {
+    let desired = config.effective_source();
+    match start_asr(config) {
+        Ok((asr, mode)) => {
+            emit_asr_status(handle, mode.status_name(), None);
+            (asr, mode, desired)
+        }
+        Err(primary_error) => {
+            if desired == AsrSource::Cloud {
+                let local_config = AsrConfig {
+                    source: AsrSource::Local,
+                    ..config.clone()
+                };
+                if let Ok((asr, mode)) = start_asr(&local_config) {
+                    let reason = format!("云端 ASR 启动失败，已回退本地 ASR：{primary_error}");
+                    eprintln!("[engine] {reason}");
+                    emit_asr_status(handle, mode.status_name(), Some(reason));
+                    return (asr, mode, AsrSource::Local);
+                }
+            }
+            let reason = format!("ASR 启动失败，已回退演示模式：{primary_error}");
+            eprintln!("[engine] {reason}");
+            emit_asr_status(handle, "mock", Some(reason));
+            (Box::new(MockAsrPort::demo()), AsrMode::Mock, desired)
+        }
+    }
 }
 
 /// 启动后台线程驱动「真实/合成 ASR → 整理管线 → 真实 LLM → 事件流」垂直链路。
@@ -74,31 +181,10 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         // 首次延迟稍长，给前端 Vite 加载 + 注册 listen 留出时间。
         std::thread::sleep(Duration::from_millis(1200));
 
-        // 尝试真实 ASR；失败回退 mock（演示模式）。partial 句柄在 real 移入
-        // Box<dyn AsrPort> 前取出，供主循环轮询。
-        let (mut asr, mode): (Box<dyn AsrPort>, AsrMode) = match SherpaAsr::spawn() {
-            Ok(real) => {
-                println!("[engine] 真实 ASR 已启动（sherpa-onnx + 麦克风）");
-                // T5 SCD 模式日志：配置层面（spawn 时决定）与生效层面（sidecar 确认）分开报。
-                if real.scd_configured() {
-                    println!(
-                        "[engine] SCD: speaker embedding 模型已配置{}",
-                        if real.scd_embedding_active() { "，sidecar 已确认加载（embedding 余弦匹配生效）" } else { "（等待 sidecar 确认加载…）" }
-                    );
-                } else {
-                    println!("[engine] SCD: 未配置 speaker embedding 模型，降级为单说话人（全部归说话人 1）");
-                }
-                let _ = handle.emit(STATUS_EVENT, serde_json::json!({ "mode": "sherpa" }));
-                let partials = real.partials_handle();
-                (Box::new(real), AsrMode::Sherpa { partials })
-            }
-            Err(e) => {
-                eprintln!("[engine] 真实 ASR 不可用，回退演示模式: {e}");
-                let _ = handle
-                    .emit(STATUS_EVENT, serde_json::json!({ "mode": "mock", "reason": e }));
-                (Box::new(MockAsrPort::demo()), AsrMode::Mock)
-            }
-        };
+        // 首次按持久化配置启动。失败降级策略见 start_asr_with_fallback。
+        let mut config = asr_config::read_config(&handle);
+        let mut last_attempted_source = config.effective_source();
+        let (mut asr, mut mode, mut active_source) = start_asr_with_fallback(&handle, &config);
 
         // 整理管线：同步路径兜底用 MockLlmPort（行为确定）；真实 LLM 走
         // tick + pending + apply_cleanup_result/fail_pending 的异步路径。
@@ -106,12 +192,45 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         let mut now = Duration::ZERO; // 逻辑时钟（自管道创建起算）
         let mut known_speakers: Vec<u32> = Vec::new(); // 已登记说话人（颜色/性别）
         let mut segment_resolved = true; // 演示模式：上一段已整理落库，才追加下一段
+        let mut config_poll_ticks: u32 = 0;
 
         loop {
             now += TICK_INTERVAL;
+            config_poll_ticks += 1;
 
-            // 1. 实时 partial（真实 ASR 模式）：publish 最新一条给前端状态行。
-            if let AsrMode::Sherpa { partials } = &mode {
+            // 1. ASR 配置轮询：保存后热切换来源。切换前排空旧 final，
+            //    pipeline / known_speakers / pending 状态保持不变。
+            if config_poll_ticks >= ASR_CONFIG_POLL_TICKS {
+                config_poll_ticks = 0;
+                let next_config = asr_config::read_config(&handle);
+                if next_config != config {
+                    let next_source = next_config.effective_source();
+                    let should_switch =
+                        should_switch_asr(next_source, active_source, last_attempted_source);
+                    if should_switch {
+                        while let Some(utt) = asr.next_utterance() {
+                            append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
+                        }
+                        asr.stop();
+                        // 先释放旧麦克风/连接，再启动新来源，避免短暂双路采集。
+                        drop(asr);
+                        let (next_asr, next_mode, next_active) =
+                            start_asr_with_fallback(&handle, &next_config);
+                        asr = next_asr;
+                        mode = next_mode;
+                        active_source = next_active;
+                        last_attempted_source = next_source;
+                    }
+                    config = next_config;
+                }
+            }
+
+            // 1b. 实时 partial（本地/云端 ASR 模式）：publish 最新一条给前端状态行。
+            let partial_mode = match &mode {
+                AsrMode::Local { partials } | AsrMode::Cloud { partials } => Some(partials),
+                AsrMode::Mock => None,
+            };
+            if let Some(partials) = partial_mode {
                 let texts: Vec<String> = partials.lock().unwrap().drain(..).collect();
                 if let Some(last) = texts.into_iter().last() {
                     emit(&handle, EngineEvent::PartialResult { text: last });
@@ -119,23 +238,21 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
             }
 
             // 2. 追加转写：
-            //    - 真实 ASR：排空 final 队列逐条追加（不丢字，final 全部入管线）；
+            //    - 本地/云端 ASR：排空 final 队列逐条追加（不丢字，final 全部入管线）；
             //    - 演示模式：无在途请求且上一段已落库时追加下一条（1 进 1 出）。
-            match &mode {
-                AsrMode::Sherpa { .. } => {
-                    while let Some(utt) = asr.next_utterance() {
-                        append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
-                    }
+            let is_real_asr = !matches!(mode, AsrMode::Mock);
+            if is_real_asr {
+                while let Some(utt) = asr.next_utterance() {
+                    append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
                 }
-                AsrMode::Mock => {
-                    if !pipeline.has_pending()
-                        && !pipeline.scheduler().is_in_flight()
-                        && segment_resolved
-                    {
-                        if let Some(utt) = asr.next_utterance() {
-                            append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
-                            segment_resolved = false;
-                        }
+            } else {
+                if !pipeline.has_pending()
+                    && !pipeline.scheduler().is_in_flight()
+                    && segment_resolved
+                {
+                    if let Some(utt) = asr.next_utterance() {
+                        append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
+                        segment_resolved = false;
                     }
                 }
             }
@@ -155,7 +272,11 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 } else {
                     Box::new(OpenAiLlmClient::new(cfg))
                 };
-                println!("[llm] segment {} 送 LLM 整理（{} 字）", p.segment_id, p.raw.chars().count());
+                println!(
+                    "[llm] segment {} 送 LLM 整理（{} 字）",
+                    p.segment_id,
+                    p.raw.chars().count()
+                );
                 let result = llm_port.cleanup_streaming(&p.raw, &mut |partial| {
                     emit(
                         &handle,
@@ -174,7 +295,10 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                         }
                     }
                     Err(err) => {
-                        println!("[llm] segment {} 整理失败（重试 3 次后放弃）: {err}", p.segment_id);
+                        println!(
+                            "[llm] segment {} 整理失败（重试 3 次后放弃）: {err}",
+                            p.segment_id
+                        );
                         for evt in pipeline.fail_pending() {
                             emit(&handle, evt);
                         }
@@ -228,4 +352,50 @@ fn emit(handle: &AppHandle, evt: EngineEvent) {
         serde_json::to_string(&evt).unwrap_or_default()
     );
     let _ = handle.emit(ENGINE_EVENT, evt);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switches_when_requested_source_changes() {
+        assert!(should_switch_asr(
+            AsrSource::Cloud,
+            AsrSource::Local,
+            AsrSource::Local
+        ));
+        assert!(should_switch_asr(
+            AsrSource::Local,
+            AsrSource::Cloud,
+            AsrSource::Cloud
+        ));
+    }
+
+    #[test]
+    fn reconnects_cloud_when_cloud_config_changes() {
+        assert!(should_switch_asr(
+            AsrSource::Cloud,
+            AsrSource::Cloud,
+            AsrSource::Cloud
+        ));
+    }
+
+    #[test]
+    fn retries_cloud_after_failed_attempt_and_config_fix() {
+        assert!(should_switch_asr(
+            AsrSource::Cloud,
+            AsrSource::Local,
+            AsrSource::Cloud
+        ));
+    }
+
+    #[test]
+    fn does_not_restart_local_when_unused_cloud_fields_change() {
+        assert!(!should_switch_asr(
+            AsrSource::Local,
+            AsrSource::Local,
+            AsrSource::Local
+        ));
+    }
 }

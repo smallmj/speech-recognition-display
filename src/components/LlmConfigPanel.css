@@ -128,3 +128,27 @@
   font-size: 12px;
   opacity: 0.75;
 }
+
+/* ---- ASR 来源配置面板（T7） ---- */
+
+.asr-config {
+  border-bottom: 1px solid rgba(127, 127, 127, 0.2);
+  padding: 6px 24px;
+}
+
+.asr-source-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.asr-field-hint {
+  font-size: 11px;
+  opacity: 0.65;
+  line-height: 1.5;
+}
+
+.llm-field input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

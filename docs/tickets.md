@@ -12,24 +12,23 @@
 | T4 | [#5](https://github.com/smallmj/speech-recognition-display/issues/5) | 真实麦克风 + 本地流式 ASR（sherpa-onnx） | T2 | ✅ 已完成 (6a51aef) |
 | T5 | [#6](https://github.com/smallmj/speech-recognition-display/issues/6) | 说话人切换检测（SCD） | T4 | ✅ 已完成 (PR #16) |
 | T6 | [#7](https://github.com/smallmj/speech-recognition-display/issues/7) | 手动命名与头像管理 | T5 | ✅ 已完成 (abc2250) |
-| T7 | [#8](https://github.com/smallmj/speech-recognition-display/issues/8) | 云端 ASR 可切换 | T4 | 🟢 frontier · 增强项 |
+| T7 | [#8](https://github.com/smallmj/speech-recognition-display/issues/8) | 云端 ASR 可切换 | T4 | ✅ 已完成（本地提交） |
 | T8 | [#9](https://github.com/smallmj/speech-recognition-display/issues/9) | LLM 整理管线（间隔 + 双轨 + 高亮） | T2 | ✅ 已完成 (835ec12) |
 | T9 | [#10](https://github.com/smallmj/speech-recognition-display/issues/10) | 真实 LLM 接入（OpenAI 兼容 + SSE + 重试） | T8 | ✅ 已合并 (PR #15) |
 | T10 | [#11](https://github.com/smallmj/speech-recognition-display/issues/11) | 会议纪要（停止后分批汇总） | T9 | 🟢 frontier · PR #17 已关闭未合并，可重开 |
 | T11 | [#12](https://github.com/smallmj/speech-recognition-display/issues/12) | 会话历史与导出 | T10 | 🔴 blocked（等 T10） |
-| T12 | [#13](https://github.com/smallmj/speech-recognition-display/issues/13) | 设置系统（标签页 + 操作提示 + 持久化） | T3, T7, T9, T11 | 🔴 blocked（等 T7、T11） |
+| T12 | [#13](https://github.com/smallmj/speech-recognition-display/issues/13) | 设置系统（标签页 + 操作提示 + 持久化） | T3, T7, T9, T11 | 🔴 blocked（等 T11） |
 | T13 | [#14](https://github.com/smallmj/speech-recognition-display/issues/14) | 托盘常驻 + 全局热键 + 会话状态 | T2 | 🟢 frontier · ⚠️ PR #18 返工中 |
 
 ## 🟢 Frontier（依赖就绪，可开始）
 
-- **T7**（云端 ASR）— 增强项，无 PR，可随时开始
 - **T10**（会议纪要）— PR #17 已关闭未合并，可重新开 PR
 - **T13**（托盘+热键）— PR #18 返工中（rebase + 修 9 编译错 + manage/命令 + 停止真停 ASR）
 
 ## 🔴 Blocked（等前置票）
 
 - **T11** — 等 T10
-- **T12** — 等 T7、T11
+- **T12** - 等 T11
 
 ## 依赖图（简）
 
@@ -37,7 +36,7 @@
 T1 ✅
 └─ T2 ✅ ─┬─ T3 ✅ ──────────────┐
           ├─ T4 ✅ ─┬─ T5 ✅ ─ T6 ✅ │
-          │         └─ T7 🟢       │
+          │         └─ T7 ✅       │
           ├─ T8 ✅ ─ T9 ✅ ─ T10 🟢 ─ T11 🔴 ─┐
           └─ T13 🟢                  │
           T12 🔴 ◀─────────────────┘ (T3,T7,T9,T11)

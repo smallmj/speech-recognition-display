@@ -62,8 +62,8 @@ export const ENGINE_EVENT = "engine://event";
 /** 壳层运行状态事件名（ASR 模式等，与 `src-tauri/src/pipeline.rs` 保持一致）。 */
 export const STATUS_EVENT = "engine://status";
 
-/** 壳层状态负载：mode = sherpa（真实本地 ASR）| mock（合成转写演示）。 */
+/** 壳层状态负载：mode = sherpa（本地 ASR）| cloud（云端 ASR）| mock（合成转写演示）。 */
 export interface StatusPayload {
-  mode: "sherpa" | "mock";
+  mode: "sherpa" | "cloud" | "mock";
   reason?: string;
 }

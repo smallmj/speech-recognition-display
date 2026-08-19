@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import DualTrackView, { useEngineEvents } from "./components/DualTrackView";
+import AsrConfigPanel from "./components/AsrConfigPanel";
 import LlmConfigPanel from "./components/LlmConfigPanel";
 import AsrLiveRow from "./components/AsrLiveRow";
 import { ENGINE_EVENT, STATUS_EVENT, type StatusPayload } from "./engineEvents";
@@ -255,7 +256,7 @@ export default function App() {
           </span>
           <span
             className={`badge ${
-              asrMode === "sherpa"
+              asrMode === "sherpa" || asrMode === "cloud"
                 ? "badge-on"
                 : asrMode === "mock"
                   ? "badge-off"
@@ -264,9 +265,11 @@ export default function App() {
           >
             {asrMode === "sherpa"
               ? "本地 ASR（sherpa-onnx）"
-              : asrMode === "mock"
-                ? "演示模式（合成转写）"
-                : "ASR 初始化中…"}
+              : asrMode === "cloud"
+                ? "云端 ASR（流式）"
+                : asrMode === "mock"
+                  ? "演示模式（合成转写）"
+                  : "ASR 初始化中…"}
           </span>
 
           <div className="app-header-right">
@@ -291,6 +294,7 @@ export default function App() {
         </header>
 
         <main className="app-main">
+          <AsrConfigPanel />
           <LlmConfigPanel />
           <DualTrackView events={events} />
           <AsrLiveRow />
