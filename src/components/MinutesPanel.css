@@ -68,3 +68,25 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+.minutes-export {
+  border: 1px solid rgba(79, 140, 255, 0.5);
+  background: rgba(79, 140, 255, 0.1);
+  color: #2f6fe4;
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.minutes-export:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.minutes-export-status {
+  font-size: 11px;
+  opacity: 0.7;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}

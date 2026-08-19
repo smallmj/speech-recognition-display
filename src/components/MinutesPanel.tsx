@@ -11,6 +11,8 @@
  * 段落渲染；不做复杂结构化解析，保证任何 LLM 输出形状都能可靠展示。
  */
 
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ReactNode } from "react";
 import "./MinutesPanel.css";
 
@@ -59,12 +61,41 @@ export function renderMinutes(text: string): ReactNode[] {
 }
 
 export default function MinutesPanel({ minutes, generating }: MinutesPanelProps) {
+  const [exportStatus, setExportStatus] = useState("");
+
+  // 新会话开始（minutes 清空）时，清除上一会话的导出状态。
+  useEffect(() => {
+    if (!minutes) setExportStatus("");
+  }, [minutes]);
+
+  const doExport = async () => {
+    if (!minutes) return;
+    setExportStatus("正在导出…");
+    try {
+      const path = await invoke<string>("export_minutes", { minutes });
+      setExportStatus(`已导出：${path}`);
+    } catch (e) {
+      setExportStatus(`导出失败: ${String(e)}`);
+    }
+  };
+
   return (
     <section className="minutes-panel" aria-label="会议纪要">
       <div className="minutes-header">
         <span className="minutes-title">📋 会议纪要</span>
         {generating && <span className="minutes-badge is-generating">正在生成纪要…</span>}
         {!generating && minutes && <span className="minutes-badge is-ready">已生成</span>}
+        {!generating && minutes && (
+          <button
+            type="button"
+            className="minutes-export"
+            onClick={doExport}
+            disabled={exportStatus === "正在导出…"}
+          >
+            💾 导出 .md
+          </button>
+        )}
+        {exportStatus && <span className="minutes-export-status">{exportStatus}</span>}
       </div>
       <div className="minutes-body">
         {generating && !minutes && (

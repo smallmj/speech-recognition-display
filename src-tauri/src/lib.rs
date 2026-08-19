@@ -18,6 +18,7 @@ mod asr_config;
 pub mod audio;
 mod bridge;
 mod cloud_asr;
+mod export;
 mod llm;
 mod pipeline;
 
@@ -49,7 +50,8 @@ pub fn run() {
             asr_config::load_asr_config,
             asr_config::save_asr_config,
             pipeline::start_session,
-            pipeline::stop_session
+            pipeline::stop_session,
+            export::export_minutes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

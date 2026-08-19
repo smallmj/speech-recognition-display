@@ -27,6 +27,11 @@
     剩余 active → 排空在途整理（PR #20 的非阻塞 worker 结果照常回填）→
     `SessionStopped` → engine 分批 → 逐批真实 LLM → 汇总 → `MinutesReady`。
   - 「开始识别」重建整理管线（片段 id 从 0 复用）并 emit `SessionStarted`。
+- **导出 .md**（`src-tauri/src/export.rs` + 前端）：
+  - `export_minutes` Tauri 命令把纪要写入系统文档目录下的
+    `语音识别展示系统-导出/会议纪要-<时间戳>.md`（带 `# 会议纪要` 标题）；
+    写文件逻辑在可测的 `export_minutes_to_dir`（TDD 测试缝）。
+  - `MinutesPanel` 新增「💾 导出 .md」按钮与导出状态/路径提示。
 - **前端**（薄渲染）：
   - `src/components/MinutesPanel.tsx` + `.css`：纪要面板，轻量解析【分节】
     标题渲染，生成中显示「正在生成纪要…」。
@@ -49,8 +54,8 @@
 
 ## 验证
 
-- `cargo test`：engine 59 个测试 + 壳层 29 个测试全部通过（含 minutes 13、
-  纪要 prompt、事件序列化、freeze_all_active、pipeline_idle 回归）。
+- `cargo test`：engine 59 个测试 + 壳层 30 个测试全部通过（含 minutes 13、
+  纪要 prompt、事件序列化、freeze_all_active、pipeline_idle、导出写文件回归）。
 - `pnpm build`：TypeScript 类型检查与 Vite 构建通过。
 - `pnpm check:focus-exit`：通过。
 
