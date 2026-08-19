@@ -21,6 +21,7 @@ mod cloud_asr;
 mod export;
 mod llm;
 mod pipeline;
+mod sessions;
 
 use tauri::Manager;
 
@@ -51,7 +52,10 @@ pub fn run() {
             asr_config::save_asr_config,
             pipeline::start_session,
             pipeline::stop_session,
-            export::export_session
+            export::export_session,
+            sessions::list_sessions,
+            sessions::load_session,
+            sessions::export_session_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

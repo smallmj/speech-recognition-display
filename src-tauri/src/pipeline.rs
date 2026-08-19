@@ -527,6 +527,22 @@ fn run_minutes(handle: &AppHandle, pipeline: &CleanupPipeline) {
             .next()
             .unwrap_or_else(|| "（无内容）".to_string())
     };
+
+    // T11 自动保存：会话（原文/整理版/说话人/时间）与纪要写入本地历史，重启后仍在。
+    let session_segments: Vec<crate::sessions::SessionSegment> = segments
+        .iter()
+        .map(|s| crate::sessions::SessionSegment {
+            id: s.id,
+            speaker_id: s.speaker_id,
+            raw: s.raw.clone(),
+            cleaned: s.cleaned.clone(),
+            ts: s.ts,
+        })
+        .collect();
+    if let Err(err) = crate::sessions::save_session(handle, session_segments, minutes.clone()) {
+        eprintln!("[sessions] 自动保存会话失败: {err}");
+    }
+
     emit(handle, EngineEvent::MinutesReady { minutes });
 }
 

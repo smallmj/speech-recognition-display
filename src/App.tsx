@@ -6,6 +6,7 @@ import AsrConfigPanel from "./components/AsrConfigPanel";
 import LlmConfigPanel from "./components/LlmConfigPanel";
 import AsrLiveRow from "./components/AsrLiveRow";
 import MinutesPanel from "./components/MinutesPanel";
+import SessionHistoryPanel from "./components/SessionHistoryPanel";
 import {
   ENGINE_EVENT,
   STATUS_EVENT,
@@ -431,6 +432,7 @@ export default function App() {
             transcript={transcript}
             generating={sessionStatus === "stopping" || sessionStatus === "generating"}
           />
+          <SessionHistoryPanel latestMinutes={minutes} />
         </main>
 
         <footer className="app-footer">

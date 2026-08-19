@@ -1,0 +1,145 @@
+/* ---- 会话历史面板（T11） ---- */
+
+.session-history {
+  border-top: 1px solid rgba(127, 127, 127, 0.2);
+  padding: 6px 24px;
+}
+
+.session-history-toggle {
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.session-history-toggle[aria-expanded="true"] {
+  background: rgba(79, 140, 255, 0.14);
+  color: #2f6fe4;
+  border-color: rgba(79, 140, 255, 0.5);
+}
+
+.session-history-body {
+  margin-top: 10px;
+  padding-bottom: 12px;
+  max-width: 760px;
+}
+
+.session-history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.session-history-status {
+  opacity: 0.65;
+}
+
+.session-history-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-history-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.session-history-time {
+  flex: 1;
+}
+
+.session-history-count {
+  opacity: 0.65;
+}
+
+.session-history-item button {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 140, 255, 0.5);
+  background: rgba(79, 140, 255, 0.1);
+  color: #2f6fe4;
+  cursor: pointer;
+}
+
+.session-history-empty {
+  font-size: 12px;
+  opacity: 0.6;
+  padding: 4px 0;
+}
+
+.session-history-detail {
+  margin-top: 10px;
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 10px;
+  padding: 12px 14px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.session-history-detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.session-history-section-title {
+  margin: 10px 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.session-history-transcript p {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.session-history-minutes {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+.session-history-exports {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.session-history-exports button {
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 140, 255, 0.5);
+  background: rgba(79, 140, 255, 0.1);
+  color: #2f6fe4;
+  cursor: pointer;
+}
+
+.session-history-export-status {
+  font-size: 11px;
+  opacity: 0.7;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
