@@ -14,7 +14,7 @@
 //!
 //! T8 新增 [crate::cleanup]：LLM 整理管线（防抖 + 固定节奏 + 单在途 + editId
 //! 校验 + 失败回退），并把 [crate::cleanup::CleanupPipeline] 等导出，供 Tauri
-//! 壳层经「`tick` 派发 pending → 调真实 LLM → `apply_cleanup_result` / 
+//! 壳层经「`tick` 派发 pending → 调真实 LLM → `apply_cleanup_result` /
 //! `fail_pending` 回填」的异步路径驱动（T9 真实 LLM 接入）。
 //! T5 新增 [crate::scd]：说话人切换检测 —— speaker embedding 余弦匹配 + 自动编号 +
 //! 音色选性别（T5 决策：降级 Unknown，见 [T5 实现总结](docs/T5-implementation-summary.md)）。
@@ -28,7 +28,9 @@ mod types;
 pub use cleanup::{CleanupPipeline, CleanupScheduler, MockLlmPort, PendingCleanup, SegmentStore};
 pub use pipeline::{speaker_color, Engine, MockAsrPort, SPEAKER_PALETTE};
 pub use scd::{cosine_similarity, Scd, ScdConfig, SpeakerDecision, SpeakerTemplate};
-pub use types::{AsrPort, EmbeddingPort, EngineEvent, Gender, LlmPort, Segment, SegmentStatus, Utterance};
+pub use types::{
+    AsrPort, EmbeddingPort, EngineEvent, Gender, LlmPort, Segment, SegmentStatus, Utterance,
+};
 
 #[cfg(test)]
 mod tests {
@@ -65,7 +67,10 @@ mod tests {
             edit_id: 3,
         };
         let evt_json = serde_json::to_string(&evt).expect("serialize event");
-        assert!(evt_json.contains("\"type\":\"segmentCleaned\""), "got: {evt_json}");
+        assert!(
+            evt_json.contains("\"type\":\"segmentCleaned\""),
+            "got: {evt_json}"
+        );
         assert!(evt_json.contains("\"segmentId\""), "got: {evt_json}");
     }
 
@@ -89,6 +94,23 @@ mod tests {
         assert_eq!(evt, back);
     }
 
+    /// 同一说话人批次整理结果的序列化契约：前端需要原子更新多个片段。
+    #[test]
+    fn segments_cleaned_event_serializes_with_type_tag_and_camel_case() {
+        let evt = EngineEvent::SegmentsCleaned {
+            segment_ids: vec![1, 3],
+            cleaned: "两句汇整后的整理版。".into(),
+            edit_id: 7,
+        };
+        let json = serde_json::to_string(&evt).expect("serialize event");
+        assert!(json.contains("\"type\":\"segmentsCleaned\""), "got: {json}");
+        assert!(json.contains("\"segmentIds\":[1,3]"), "got: {json}");
+        assert!(json.contains("\"editId\":7"), "got: {json}");
+
+        let back: EngineEvent = serde_json::from_str(&json).expect("deserialize event");
+        assert_eq!(evt, back);
+    }
+
     /// T9 审查修复：`LlmPort::cleanup_streaming` 默认实现走同步 `cleanup`
     /// 并回调一次全量（mock / 同步端口无需覆盖）；trait 对象安全（可
     /// `Box<dyn LlmPort>` 调用），engine 测试缝可覆盖流式路径。
@@ -105,7 +127,8 @@ mod tests {
         }
 
         let mut received: Vec<String> = Vec::new();
-        let result = MockLlm.cleanup_streaming("口语原文", &mut |p| received.push(p.to_string()));
+        let result =
+            MockLlm.cleanup_streaming("口语原文", &mut |p| received.push(p.to_string()));
         assert_eq!(result.as_deref(), Ok("【口语原文】"));
         assert_eq!(received, vec!["【口语原文】"], "默认实现应回调一次全量结果");
     }

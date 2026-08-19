@@ -14,19 +14,19 @@
  * 渲染规则：
  * - 默认（整理版模式）：有 `cleaned` 显示整理版并高亮改动词；
  *   状态 `failed` 回退显示原文；尚未整理的 `active`/`frozen` 显示原文作占位。
- * - 流式填充（T9）：收到 `segmentCleaning`（LLM SSE 增量）后、`segmentCleaned`
- *   到达前，显示累积的 `cleaningPartial` 文本并带「整理中 · 流式…」标识，
- *   最终结果到达后替换为整理版（diff 高亮）。
+ * - 整理中（T9）：收到 `segmentCleaning` 后继续显示原文并标记「整理中…」；
+ *   `SegmentCleaned` / `SegmentsCleaned` 到达后才切换为整理版（diff 高亮），
+ *   避免正在阅读的文字消失。
  * - 原文模式：一律显示原文 `raw`。
  */
 
-import { useMemo, useState } from "react";
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ENGINE_EVENT, type EngineEvent, type Segment } from "../engineEvents";
 import { subscribe } from "../tauriEvent";
 import { profileOf, useSpeakerProfiles } from "../speakerProfiles";
 import SpeakerBadge from "./SpeakerBadge";
 import { diffHighlight } from "./diff";
+import { buildRenderGroups } from "./renderGroups";
 import "./DualTrack.css";
 
 /** 未登记到说话人时的兜底颜色（SpeakerAssigned 先到，正常不会用到）。 */
@@ -49,8 +49,9 @@ type DisplayMode = "cleaned" | "raw";
 
 /**
  * 把事件流规约到片段映射：`SegmentAppended` 增，`SegmentCleaning` 累积流式
- * 增量（`cleaningPartial`），`SegmentCleaned` 更新（editId 校验：只接受更大
- * 值，防御乱序）并清空增量，`CleanupFailed` 置 Failed 并清空增量。
+ * 增量（`cleaningPartial`），`SegmentCleaned` / `SegmentsCleaned` 更新
+ * （editId 校验：只接受更大值，防御乱序）并清空增量，`CleanupFailed`
+ * 置 Failed 并清空增量。
  */
 export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent): Map<number, Segment> {
   switch (evt.type) {
@@ -91,10 +92,30 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
         cleaned: evt.cleaned,
         editId: evt.editId,
         status: "cleaned",
-        cleaningPartial: null, // 最终结果到达，流式增量作废
+        cleaningPartial: null, // 最终结果到达，整理中状态作废
         cleaningEditId: null,
       });
       return next;
+    }
+    case "segmentsCleaned": {
+      // 批量结果必须原子应用到同一请求覆盖的全部片段，避免前端出现半批更新。
+      const next = new Map(prev);
+      let applied = false;
+      for (const segmentId of evt.segmentIds) {
+        const seg = next.get(segmentId);
+        if (!seg) continue;
+        if (seg.editId != null && evt.editId <= seg.editId) continue;
+        next.set(segmentId, {
+          ...seg,
+          cleaned: evt.cleaned,
+          editId: evt.editId,
+          status: "cleaned",
+          cleaningPartial: null,
+          cleaningEditId: null,
+        });
+        applied = true;
+      }
+      return applied ? next : prev;
     }
     case "cleanupFailed": {
       const seg = prev.get(evt.segmentId);
@@ -159,11 +180,12 @@ export function useEngineEvents(): EngineEvent[] {
 }
 
 /** 判断一条片段在给定模式下展示哪种文本。 */
-export function resolveMode(seg: Segment, mode: DisplayMode): "cleaned" | "raw" | "partial" | "pending" {
+export function resolveMode(seg: Segment, mode: DisplayMode): "cleaned" | "raw" | "pending" {
   if (mode === "raw") return "raw";
   if (seg.status === "failed") return "raw"; // 整理失败回退原文
   if (seg.status === "cleaned" && seg.cleaned != null) return "cleaned";
-  if (seg.cleaningPartial != null) return "partial"; // 流式整理中：显示增量
+  // 整理中继续显示原文，最终结果到达后一次性切换，避免正在阅读的文字消失。
+  if (seg.cleaningPartial != null) return "pending";
   return "pending"; // active/frozen：整理版未就绪，临时显示原文
 }
 
@@ -176,6 +198,7 @@ export default function DualTrackView({
   onIntervalChange,
 }: DualTrackViewProps) {
   const [mode, setMode] = useState<DisplayMode>("cleaned");
+  const bottomRef = useRef<HTMLDivElement | null>(null);
   const { profiles, renameSpeaker, setSpeakerAvatar, randomAvatar } = useSpeakerProfiles();
 
   const segments = useMemo(() => reduceEvents(events), [events]);
@@ -184,9 +207,17 @@ export default function DualTrackView({
     () => [...segments.values()].sort((a, b) => a.id - b.id),
     [segments],
   );
+  const renderGroups = useMemo(() => buildRenderGroups(sorted), [sorted]);
 
   const cleanedCount = [...segments.values()].filter((s) => s.status === "cleaned").length;
   const failedCount = [...segments.values()].filter((s) => s.status === "failed").length;
+
+  // 新片段到达后跟随到底部。这里关注 sorted.length 而不是文本内容：
+  // 同一段 partial 更新不应抢夺用户滚动位置，只有新气泡出现才跟随。
+  // scrollIntoView 会同时驱动列表容器和页面级滚动，避免新字幕在屏幕外。
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
+  }, [sorted.length]);
 
   return (
     <div className="dual-track">
@@ -228,27 +259,26 @@ export default function DualTrackView({
           </div>
         )}
 
-        {sorted.map((seg) => {
-          const color = speakerColors.get(seg.speakerId) ?? FALLBACK_COLOR;
-          const segMode = resolveMode(seg, mode);
+        {renderGroups.map((group) => {
+          const color = speakerColors.get(group.speakerId) ?? FALLBACK_COLOR;
+          const segMode = resolveMode(group.primary, mode);
           return (
-            <div className="dual-row" key={seg.id}>
+            <div className="dual-row" key={group.key}>
               <div className="dual-meta">
                 <SpeakerBadge
-                  speakerId={seg.speakerId}
+                  speakerId={group.speakerId}
                   color={color}
-                  profile={profileOf(profiles, seg.speakerId)}
+                  profile={profileOf(profiles, group.speakerId)}
                   onRename={renameSpeaker}
                   onSetAvatar={setSpeakerAvatar}
                   onRandomAvatar={randomAvatar}
                 />
-                {segMode === "partial" && (
-                  <span className="dual-badge is-streaming">整理中 · 流式…</span>
-                )}
-                {segMode !== "partial" && seg.status === "active" && (
+                {(group.segments.some((seg) => seg.status === "active" || seg.cleaningPartial != null)) && (
                   <span className="dual-badge is-pending">整理中…</span>
                 )}
-                {seg.status === "failed" && <span className="dual-badge is-failed">整理失败 · 原文</span>}
+                {group.primary.status === "failed" && (
+                  <span className="dual-badge is-failed">整理失败 · 原文</span>
+                )}
               </div>
               <div
                 className={`dual-text ${segMode === "raw" || segMode === "pending" ? "is-raw" : ""}`}
@@ -257,8 +287,8 @@ export default function DualTrackView({
                   background: `${color}1f`,
                 }}
               >
-                {segMode === "cleaned" && seg.cleaned != null
-                  ? diffHighlight(seg.raw, seg.cleaned).map((run, i) =>
+                {segMode === "cleaned" && group.primary.cleaned != null
+                  ? diffHighlight(group.raw, group.primary.cleaned).map((run, i) =>
                       run.added ? (
                         <mark key={i} className="dual-mark">
                           {run.text}
@@ -267,20 +297,12 @@ export default function DualTrackView({
                         <span key={i}>{run.text}</span>
                       ),
                     )
-                  : segMode === "partial" && seg.cleaningPartial != null
-                    ? (
-                        <span className="dual-partial">
-                          {seg.cleaningPartial}
-                          <span className="dual-caret" aria-hidden>
-                            ▌
-                          </span>
-                        </span>
-                      )
-                    : seg.raw}
+                  : group.raw}
               </div>
             </div>
           );
         })}
+        <div ref={bottomRef} aria-hidden />
       </div>
 
       <footer className="dual-status">

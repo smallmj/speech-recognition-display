@@ -21,8 +21,9 @@ export interface Segment {
   ts: number;
   retries: number;
   /**
-   * 客户端侧的流式整理增量（非 Rust 序列化字段）：收到 `segmentCleaning`
-   * 时累积，`segmentCleaned` / `cleanupFailed` 到达后清空。
+   * 客户端侧的流式整理增量（非 Rust 序列化字段）：仅用于标记「整理中」；
+   * 展示层保留原文，`segmentCleaned` / `segmentsCleaned` / `cleanupFailed`
+   * 到达后清空。
    */
   cleaningPartial?: string | null;
   /**
@@ -48,11 +49,18 @@ export type EngineEvent =
   | {
       type: "segmentCleaning";
       segmentId: number;
-      /** 本次流式请求的 editId（同一请求内不变）；渲染层只接受 `>= 当前` 的增量。 */
+      /** 本次流式请求的 editId（同一请求内不变）；渲染层只接受 `>= 当前` 的状态信号。 */
       editId: number;
       partial: string;
     }
   | { type: "segmentCleaned"; segmentId: number; cleaned: string; editId: number }
+  | {
+      /** 同一次 LLM 请求覆盖的片段批次（同一说话人的全部未整理片段）。 */
+      type: "segmentsCleaned";
+      segmentIds: number[];
+      cleaned: string;
+      editId: number;
+    }
   | { type: "cleanupFailed"; segmentId: number }
   | { type: "minutesReady"; minutes: string };
 

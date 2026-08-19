@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "check:focus-exit": "node scripts/check-focus-exit.mjs"
+    "check:focus-exit": "node scripts/check-focus-exit.mjs",
+    "check:dual-track": "node --experimental-strip-types scripts/check-dual-track-regressions.mjs",
+    "check:llm-nonblocking": "node scripts/check-llm-nonblocking.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

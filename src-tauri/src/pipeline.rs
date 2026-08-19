@@ -8,10 +8,10 @@
 //!   事件告知前端（`{"mode":"sherpa"|"cloud"|"mock"}`）。
 //! - **final 统一进整理管线（T9）**：无论真实还是合成，final 转写都直接喂入
 //!   [engine::CleanupPipeline]（防抖 + 固定节奏 + 单在途），驱动线程周期
-//!   `tick(now)` 冻结并派发 `pending`，拿到 pending 后调真实 OpenAI 兼容
-//!   LLM（[crate::llm::OpenAiLlmClient]，SSE 流式），每个 delta 以
-//!   `SegmentCleaning` 增量 emit（前端逐字填充整理版），完成后经
-//!   `apply_cleanup_result` 回填并 emit `SegmentCleaned`，失败经
+//!   `tick(now)` 冻结并派发 `pending`，**LLM 请求交给独立 worker 线程**
+//!   执行（[crate::llm::OpenAiLlmClient]，SSE 流式），每个 delta 以
+//!   `SegmentCleaning` 状态信号 emit（前端整理中保留原文），完成后经
+//!   `apply_cleanup_result` 回填并 emit `SegmentsCleaned`（同一说话人批次），失败经
 //!   `fail_pending` emit `CleanupFailed`（前端回退展示原文）。
 //! - **说话人**：T4 阶段无 SCD，真实 ASR 的 final 全部归说话人 1、性别
 //!   Unknown（T5 接入 SCD 后替换）；SpeakerAssigned（颜色/性别）在片段
@@ -31,7 +31,7 @@
 //! 为单说话人（见 asr.rs 注释）。
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use engine::{AsrPort, CleanupPipeline, EngineEvent, MockAsrPort, MockLlmPort};
@@ -169,12 +169,21 @@ fn start_asr_with_fallback(
     }
 }
 
+/// LLM 异步结果：worker 线程完成后经 mpsc 通道交回主循环回填。
+///
+/// 主循环绝不能在整理请求期间阻塞——识别（final/partial）优先，LLM 整理
+/// 交给独立线程，这样整理中仍能实时显示新识别文字。
+struct LlmOutcome {
+    segment_ids: Vec<u64>,
+    edit_id: u64,
+    result: Result<String, String>,
+}
+
 /// 启动后台线程驱动「真实/合成 ASR → 整理管线 → 真实 LLM → 事件流」垂直链路。
 ///
-/// 节奏：每节拍推进逻辑时钟 → （真实模式）拉取并 publish 最新 partial、
-/// 排空 final 队列逐条追加；（演示模式）无在途请求且上一段已落库时追加
-/// 下一条 → `tick(now)` → 有 pending 则调真实 LLM（SSE 增量 emit）→
-/// 回填/失败。
+/// 节奏：每节拍推进逻辑时钟 → 拉取并 publish 最新 partial、排空 final 队列
+/// 逐条追加（真实与演示模式都不因整理而停顿）→ `tick(now)` → 有 pending
+/// 则交独立线程调真实 LLM（SSE 增量 emit）→ 结果经通道回主循环回填/失败。
 pub fn spawn_engine_emitter(app: &AppHandle) {
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -186,13 +195,16 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         let mut last_attempted_source = config.effective_source();
         let (mut asr, mut mode, mut active_source) = start_asr_with_fallback(&handle, &config);
 
-        // 整理管线：同步路径兜底用 MockLlmPort（行为确定）；真实 LLM 走
-        // tick + pending + apply_cleanup_result/fail_pending 的异步路径。
+        // 整理管线：初始 MockLlmPort 仅作占位；每个 pending 在 worker 线程里
+        // 按最新配置选择 Mock / 真实 LLM，结果经通道回主循环回填。
         let mut pipeline = CleanupPipeline::new_with_defaults(Box::new(MockLlmPort));
         let mut now = Duration::ZERO; // 逻辑时钟（自管道创建起算）
         let mut known_speakers: Vec<u32> = Vec::new(); // 已登记说话人（颜色/性别）
-        let mut segment_resolved = true; // 演示模式：上一段已整理落库，才追加下一段
         let mut config_poll_ticks: u32 = 0;
+        // LLM 整理在独立线程执行，结果经通道交回；dispatched_edit_id 防止
+        // 同一条 pending 被重复送线程（pending 清空后 edit_id 才递增）。
+        let (llm_result_tx, llm_result_rx) = mpsc::channel::<LlmOutcome>();
+        let mut dispatched_edit_id: Option<u64> = None;
 
         loop {
             now += TICK_INTERVAL;
@@ -237,74 +249,92 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 }
             }
 
-            // 2. 追加转写：
-            //    - 本地/云端 ASR：排空 final 队列逐条追加（不丢字，final 全部入管线）；
-            //    - 演示模式：无在途请求且上一段已落库时追加下一条（1 进 1 出）。
+            // 2. 追加转写：无论整理是否在途，final 都逐条追加（不丢字、不等待）。
             let is_real_asr = !matches!(mode, AsrMode::Mock);
             if is_real_asr {
+                // 真实 ASR：final 无条件逐条追加（不丢字、不等待整理完成）。
                 while let Some(utt) = asr.next_utterance() {
                     append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
                 }
-            } else {
-                if !pipeline.has_pending()
-                    && !pipeline.scheduler().is_in_flight()
-                    && segment_resolved
-                {
-                    if let Some(utt) = asr.next_utterance() {
-                        append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
-                        segment_resolved = false;
-                    }
-                }
+            } else if let Some(utt) = asr.next_utterance() {
+                // 演示模式：也照常追加，模拟“边说边识别”不因整理而停顿。
+                append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
             }
 
-            // 3. 时钟滴答：防抖/节奏触发 → 冻结 active → 派发一个 pending（单在途）。
-            pipeline.tick(now);
-
-            // 4. 有 pending → 经 LlmPort trait 调真实/mock LLM（SSE 流式）：
-            //    增量 emit，完成/失败回填。
-            if let Some(p) = pipeline.pending().cloned() {
-                // 每次请求前重读配置：配置了有效 API Key 用真实客户端，
-                // 否则用 MockLlmPort（未配置时整理降级为占位，ASR 不受影响）。
-                let cfg = llm::read_config(&handle);
-                let llm_port: Box<dyn engine::LlmPort> = if cfg.api_key.trim().is_empty() {
-                    println!("[llm] 未配置 API Key，整理降级为 mock 占位");
-                    Box::new(MockLlmPort)
-                } else {
-                    Box::new(OpenAiLlmClient::new(cfg))
-                };
-                println!(
-                    "[llm] segment {} 送 LLM 整理（{} 字）",
-                    p.segment_id,
-                    p.raw.chars().count()
-                );
-                let result = llm_port.cleanup_streaming(&p.raw, &mut |partial| {
-                    emit(
-                        &handle,
-                        EngineEvent::SegmentCleaning {
-                            segment_id: p.segment_id,
-                            edit_id: p.edit_id,
-                            partial: partial.to_string(),
-                        },
-                    );
-                });
-                match result {
+            // 3. 先收 LLM 结果（若已就绪）：回填/失败与下一次派发同拍完成。
+            while let Ok(outcome) = llm_result_rx.try_recv() {
+                let is_current = pipeline
+                    .pending()
+                    .is_some_and(|p| p.edit_id == outcome.edit_id);
+                if !is_current {
+                    continue; // 迟到/重复结果，忽略，不干扰当前在途请求
+                }
+                match outcome.result {
                     Ok(cleaned) => {
-                        println!("[llm] segment {} 整理完成: {cleaned:?}", p.segment_id);
-                        for evt in pipeline.apply_cleanup_result(p.segment_id, cleaned, p.edit_id) {
+                        println!(
+                            "[llm] segments {:?} 整理完成: {cleaned:?}",
+                            outcome.segment_ids
+                        );
+                        for evt in pipeline.apply_cleanup_result(
+                            &outcome.segment_ids,
+                            cleaned,
+                            outcome.edit_id,
+                        ) {
                             emit(&handle, evt);
                         }
                     }
                     Err(err) => {
-                        println!(
-                            "[llm] segment {} 整理失败（重试 3 次后放弃）: {err}",
-                            p.segment_id
-                        );
+                        println!("[llm] segment 整理失败（重试 3 次后放弃）: {err}");
                         for evt in pipeline.fail_pending() {
                             emit(&handle, evt);
                         }
                     }
                 }
-                segment_resolved = true;
+            }
+
+            // 4. 时钟滴答：防抖/节奏触发 → 冻结 active → 派发一个 pending（单在途）。
+            pipeline.tick(now);
+
+            // 5. 有未派发的 pending → 交独立线程整理，主循环不等待。
+            if let Some(p) = pipeline.pending().cloned() {
+                if dispatched_edit_id == Some(p.edit_id) {
+                    continue; // 已派发过：什么都不做，等结果回来（尾部 sleep 统一执行）。
+                }
+                dispatched_edit_id = Some(p.edit_id);
+                let tx = llm_result_tx.clone();
+                let worker_handle = handle.clone();
+                std::thread::spawn(move || {
+                    // 每次请求前重读配置：配置了有效 API Key 用真实客户端，
+                    // 否则用 MockLlmPort（未配置时整理降级为占位，ASR 不受影响）。
+                    let cfg = llm::read_config(&worker_handle);
+                    let llm_port: Box<dyn engine::LlmPort> = if cfg.api_key.trim().is_empty() {
+                        println!("[llm] 未配置 API Key，整理降级为 mock 占位");
+                        Box::new(MockLlmPort)
+                    } else {
+                        Box::new(OpenAiLlmClient::new(cfg))
+                    };
+                    println!(
+                        "[llm] speaker {} segments {:?} 送 LLM 整理（{} 字）",
+                        p.speaker_id,
+                        p.segment_ids,
+                        p.raw.chars().count()
+                    );
+                    let result = llm_port.cleanup_streaming(&p.raw, &mut |partial| {
+                        emit(
+                            &worker_handle,
+                            EngineEvent::SegmentCleaning {
+                                segment_id: p.segment_id,
+                                edit_id: p.edit_id,
+                                partial: partial.to_string(),
+                            },
+                        );
+                    });
+                    let _ = tx.send(LlmOutcome {
+                        segment_ids: p.segment_ids,
+                        edit_id: p.edit_id,
+                        result,
+                    });
+                });
             }
 
             std::thread::sleep(TICK_INTERVAL);
