@@ -860,6 +860,15 @@ body {
   opacity: 0.85;
 }
 
+.app-loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--settings-hint);
+  font-size: 13px;
+}
+
 @media (max-width: 640px) {
   .settings-dialog-body {
     flex-direction: column;

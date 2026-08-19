@@ -34,6 +34,8 @@ export interface SettingsDialogProps {
   onCleanupIntervalChange: (seconds: CleanupInterval) => void;
   /** 最近一次纪要文本（历史页刷新用）。 */
   latestMinutes: string | null;
+  /** 重新运行首次初始化（清除完成标记并回到向导）。 */
+  onReinitialize: () => void;
 }
 
 type TabId = "general" | "asr" | "llm" | "display" | "shortcut" | "history" | "about";
@@ -64,6 +66,7 @@ export default function SettingsDialog({
   cleanupInterval,
   onCleanupIntervalChange,
   latestMinutes,
+  onReinitialize,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<TabId>("general");
   const { settings, setTheme, setFocusMode, setFontSize, setFontFamily, setTextColor } =
@@ -160,6 +163,22 @@ export default function SettingsDialog({
                 <p className="settings-panel-hint">
                   选择后立即保存到本机并即时生效（后台每秒同步），无需重启应用。
                 </p>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">初始化</p>
+                  <p className="settings-panel-hint">
+                    重新检测运行环境、切换本地 / 云端模式或更换下载镜像；已完成的步骤会跳过。
+                  </p>
+                  <button
+                    type="button"
+                    className="settings-option"
+                    onClick={onReinitialize}
+                  >
+                    重新运行初始化
+                  </button>
+                </div>
               </section>
             )}
 

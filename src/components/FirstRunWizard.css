@@ -1,0 +1,239 @@
+/* 首次运行初始化向导（T14） */
+
+.first-run-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--app-bg);
+  color: var(--app-fg);
+}
+
+.first-run-panel {
+  width: min(620px, 100%);
+  padding: 28px;
+  border: 1px solid var(--settings-panel-border);
+  border-radius: 8px;
+  background: var(--settings-panel-bg);
+  box-shadow: var(--settings-panel-shadow);
+}
+
+.first-run-header {
+  margin-bottom: 20px;
+}
+
+.first-run-title {
+  margin: 0 0 6px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.first-run-subtitle {
+  margin: 0;
+  color: var(--settings-hint);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.first-run-mode {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.first-run-mode-btn {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--settings-panel-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.first-run-mode-btn.is-active {
+  border-color: var(--settings-option-active-fg);
+  background: var(--settings-option-active-bg);
+  color: var(--settings-option-active-fg);
+}
+
+.first-run-mirror {
+  margin: 4px 0 16px;
+}
+
+.first-run-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--settings-section-title);
+  font-size: 12px;
+}
+
+.first-run-steps {
+  list-style: none;
+  margin: 16px 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.first-run-step {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--settings-panel-border);
+  border-radius: 8px;
+  background: var(--app-bg);
+}
+
+.first-run-step-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--settings-panel-border);
+  color: var(--settings-hint);
+  font-size: 13px;
+}
+
+.first-run-step.is-running .first-run-step-icon {
+  border-color: var(--settings-option-active-fg);
+  color: var(--settings-option-active-fg);
+}
+
+.first-run-step.is-done .first-run-step-icon {
+  border-color: var(--badge-on-border);
+  background: var(--badge-on-bg);
+  color: var(--badge-on-fg);
+}
+
+.first-run-step.is-failed .first-run-step-icon {
+  border-color: var(--badge-off-border);
+  background: var(--badge-off-bg);
+  color: var(--badge-off-fg);
+}
+
+.first-run-step-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.first-run-step-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.first-run-step-count {
+  color: var(--settings-hint);
+  font-size: 11px;
+}
+
+.first-run-step-desc,
+.first-run-step-message {
+  margin: 3px 0 0;
+  color: var(--settings-hint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.first-run-step-message {
+  color: var(--app-fg);
+}
+
+.first-run-progress {
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: var(--settings-option-hover);
+  overflow: hidden;
+}
+
+.first-run-progress-fill {
+  height: 100%;
+  background: var(--settings-option-active-fg);
+  transition: width 0.2s ease;
+}
+
+.first-run-skip {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--settings-hint);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.first-run-skip input {
+  margin-top: 2px;
+}
+
+.first-run-cloud {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.first-run-field {
+  display: grid;
+  gap: 5px;
+  color: var(--settings-section-title);
+  font-size: 12px;
+}
+
+.first-run-field input {
+  padding: 8px 10px;
+  border: 1px solid var(--settings-panel-border);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--app-fg);
+  font-size: 13px;
+}
+
+.first-run-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--badge-off-border);
+  border-radius: 6px;
+  background: var(--badge-off-bg);
+  color: var(--badge-off-fg);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.first-run-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.first-run-primary,
+.first-run-secondary {
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.first-run-primary {
+  border: 1px solid var(--settings-option-active-fg);
+  background: var(--settings-option-active-fg);
+  color: #fff;
+}
+
+.first-run-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.first-run-secondary {
+  border: 1px solid var(--settings-panel-border);
+  background: transparent;
+  color: var(--app-fg);
+}

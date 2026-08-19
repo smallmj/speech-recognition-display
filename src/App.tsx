@@ -9,6 +9,7 @@ import DualTrackView, {
 import SettingsDialog from "./components/SettingsDialog";
 import AsrLiveRow from "./components/AsrLiveRow";
 import MinutesPanel from "./components/MinutesPanel";
+import FirstRunWizard, { type FirstRunConfig } from "./components/FirstRunWizard";
 import {
   ENGINE_EVENT,
   STATUS_EVENT,
@@ -78,12 +79,15 @@ export default function App() {
   const [asrMode, setAsrMode] = useState<StatusPayload["mode"] | null>(null);
   const [scdStatus, setScdStatus] = useState<StatusPayload["scd"] | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // T14 首次运行：未完成时启动直接进向导；「稍后再配」本次跳过，下次启动仍回向导。
+  const [firstRun, setFirstRun] = useState<FirstRunConfig | null>(null);
+  const [skipFirstRun, setSkipFirstRun] = useState(false);
   // T12 整理间隔：启动时从 Rust 常规配置加载，切换后保存并即时生效。
   const [cleanupInterval, setCleanupInterval] = useState<CleanupInterval>(5);
   // T10 会话状态机：识别中 → 停止/生成纪要 → 纪要已生成 →（开始识别）识别中。
   const [sessionStatus, setSessionStatus] = useState<
-    "recognizing" | "stopping" | "generating" | "ready"
-  >("recognizing");
+    "idle" | "recognizing" | "stopping" | "generating" | "ready"
+  >("idle");
   const [minutes, setMinutes] = useState<string | null>(null);
 
   // T1 调试心跳：bridge://ping → 回执，确认 Rust→前端事件桥闭环。
@@ -157,6 +161,25 @@ export default function App() {
 
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
+  // T14：启动读取首次运行状态；已完成直接进主界面，未完成进向导。
+  useEffect(() => {
+    invoke<FirstRunConfig>("load_first_run_config")
+      .then(setFirstRun)
+      .catch((e) => {
+        console.warn("[first-run] 读取初始化状态失败:", e);
+        setFirstRun({ completed: false, mode: "local", mirror: "huggingface" });
+      });
+  }, []);
+
+  const handleReinitialize = useCallback(() => {
+    setSettingsOpen(false);
+    setSkipFirstRun(false);
+    setFirstRun({ completed: false, mode: "local", mirror: "huggingface" });
+    invoke("reset_first_run").catch((e) =>
+      console.warn("[first-run] 重置初始化状态失败:", e),
+    );
+  }, []);
+
   // T9 主事件源：整理管线驱动（真实/合成转写 → 真实 LLM → 双轨事件流）。
   const events = useEngineEvents();
 
@@ -219,11 +242,25 @@ export default function App() {
   };
 
   const sessionBadge = {
+    idle: { cls: "badge-wait", text: "未开始" },
     recognizing: { cls: "badge-on", text: "识别中" },
     stopping: { cls: "badge-off", text: "正在停止…" },
     generating: { cls: "badge-off", text: "正在生成纪要…" },
     ready: { cls: "badge-on", text: "纪要已生成" },
   }[sessionStatus];
+
+  if (firstRun === null) {
+    return <div className="app-loading">正在启动…</div>;
+  }
+
+  if (!skipFirstRun && !firstRun.completed) {
+    return (
+      <FirstRunWizard
+        onComplete={() => setSkipFirstRun(true)}
+        onLater={() => setSkipFirstRun(true)}
+      />
+    );
+  }
 
   return (
     <DisplayContext.Provider value={display}>
@@ -267,7 +304,7 @@ export default function App() {
                 type="button"
                 className="session-btn is-start"
                 onClick={startSession}
-                disabled={sessionStatus !== "ready"}
+                disabled={sessionStatus !== "ready" && sessionStatus !== "idle"}
               >
                 ▶ 开始识别
               </button>
@@ -337,6 +374,7 @@ export default function App() {
           cleanupInterval={cleanupInterval}
           onCleanupIntervalChange={handleCleanupIntervalChange}
           latestMinutes={minutes}
+          onReinitialize={handleReinitialize}
         />
       </div>
     </DisplayContext.Provider>

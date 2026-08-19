@@ -190,11 +190,11 @@ fn start_asr_with_fallback(
 /// 会话控制信号：前端 command（[stop_session] / [start_session]）与驱动线程共享。
 ///
 /// 两个原子标志即表达会话状态机：
-/// - 识别中：`running=true`（应用启动即自动开始一个会话，对齐 T9 演示行为）；
+/// - 识别中：`running=true`（点「开始识别」后进入；应用启动时为 false）；
 /// - 停止中：前端置 `stop_requested`，驱动线程收到后进入停止分支
 ///   （不再追加 → 冻结 → 排空整理 → 分批汇总纪要）；
 /// - 已停止待开始：`running=false`，前端「开始识别」置 `start_requested`，
-///   驱动线程重建管线并 emit `SessionStarted`。
+///   驱动线程重新拉起 ASR、重建管线并 emit `SessionStarted`。
 #[derive(Clone)]
 pub struct SessionControl {
     stop_requested: Arc<AtomicBool>,
@@ -248,10 +248,13 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         // 首次延迟稍长，给前端 Vite 加载 + 注册 listen 留出时间。
         std::thread::sleep(Duration::from_millis(1200));
 
-        // 首次按持久化配置启动。失败降级策略见 start_asr_with_fallback。
+        // 启动时只读配置，不拉起麦克风/sidecar；首次「开始识别」才启动。
+        // 失败降级策略见 start_asr_with_fallback。
         let mut config = asr_config::read_config(&handle);
         let mut last_attempted_source = config.effective_source();
-        let (mut asr, mut mode, mut active_source) = start_asr_with_fallback(&handle, &config);
+        let mut asr: Option<Box<dyn AsrPort>> = None;
+        let mut mode: Option<AsrMode> = None;
+        let mut active_source = config.effective_source();
 
         // 整理管线：初始 MockLlmPort 仅作占位；每个 pending 在 worker 线程里
         // 按最新配置选择 Mock / 真实 LLM，结果经通道回主循环回填。
@@ -269,10 +272,9 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
         let (llm_result_tx, llm_result_rx) = mpsc::channel::<LlmOutcome>();
         let mut dispatched_edit_id: Option<u64> = None;
 
-        // 会话状态机：应用启动即自动开始一个会话（对齐 T9 演示行为）。
-        let mut running = true;
+        // 会话状态机：启动落在「未开始」，点「开始识别」后再进入识别。
+        let mut running = false;
         let mut stopping = false;
-        emit(&handle, EngineEvent::SessionStarted);
 
         loop {
             now += TICK_INTERVAL;
@@ -296,7 +298,7 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 }
             }
 
-            // 1. ASR 配置轮询：保存后热切换来源。切换前排空旧 final，
+            // 1. ASR 配置轮询：识别中保存后热切换来源。切换前排空旧 final，
             //    pipeline / known_speakers / pending 状态保持不变。
             if config_poll_ticks >= ASR_CONFIG_POLL_TICKS && running {
                 config_poll_ticks = 0;
@@ -306,16 +308,14 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                     let should_switch =
                         should_switch_asr(next_source, active_source, last_attempted_source);
                     if should_switch {
-                        while let Some(utt) = asr.next_utterance() {
-                            append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
-                        }
-                        asr.stop();
+                        let asr_ref = asr.as_mut().expect("识别中 ASR 必须已启动");
+                        drain_asr_inputs(asr_ref, &handle, &mut pipeline, &mut known_speakers, now);
+                        asr_ref.stop();
                         // 先释放旧麦克风/连接，再启动新来源，避免短暂双路采集。
-                        drop(asr);
                         let (next_asr, next_mode, next_active) =
                             start_asr_with_fallback(&handle, &next_config);
-                        asr = next_asr;
-                        mode = next_mode;
+                        asr = Some(next_asr);
+                        mode = Some(next_mode);
                         active_source = next_active;
                         last_attempted_source = next_source;
                     }
@@ -323,11 +323,26 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 }
             }
 
-            // 2. 会话控制：收到「开始识别」且已停止完成 → 重建管线开新会话；
-            //    收到「停止并生成纪要」→ 停止追加并进入纪要停止流程。
+            // 2. 会话控制：收到「开始识别」且已停止完成 → 启动/复用 ASR 并重建
+            //    管线开新会话；收到「停止并生成纪要」→ 停止追加并进入纪要停止流程。
             if !running && !stopping && control.start_requested.swap(false, Ordering::Relaxed) {
                 // 停止期间 ASR 可能仍积累 final：丢弃，避免旧会话内容混入新会话。
-                discard_asr_inputs(&mut asr, &mode);
+                if let (Some(asr_ref), Some(mode_ref)) = (asr.as_mut(), mode.as_ref()) {
+                    discard_asr_inputs(asr_ref, mode_ref);
+                }
+                let next_config = asr_config::read_config(&handle);
+                // 每次「开始识别」都重新拉起 ASR：让模型补齐/云端配置变更立即生效，
+                // 也避免先以 mock 回退启动后，后续会话仍复用旧 mock。
+                if let Some(mut old) = asr.take() {
+                    old.stop();
+                }
+                let (next_asr, next_mode, next_active) =
+                    start_asr_with_fallback(&handle, &next_config);
+                asr = Some(next_asr);
+                mode = Some(next_mode);
+                active_source = next_active;
+                last_attempted_source = next_config.effective_source();
+                config = next_config;
                 pipeline = CleanupPipeline::new_with_defaults(Box::new(MockLlmPort));
                 pipeline.set_rhythm_duration(app_config.cleanup_interval());
                 now = Duration::ZERO;
@@ -338,10 +353,9 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
             }
 
             if running && control.stop_requested.swap(false, Ordering::Relaxed) {
+                let asr_ref = asr.as_mut().expect("识别中 ASR 必须已启动");
                 // 把停止瞬间已在缓冲的 final 全部收进管线，再冻结剩余 active。
-                while let Some(utt) = asr.next_utterance() {
-                    append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
-                }
+                drain_asr_inputs(asr_ref, &handle, &mut pipeline, &mut known_speakers, now);
                 let frozen = pipeline.freeze_all_active();
                 println!("[session] 停止识别：冻结 {frozen} 条剩余片段，进入纪要流程");
                 running = false;
@@ -350,11 +364,13 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
 
             // 3. 转写输入：
             //    - 识别中：partial 实时 publish、final 逐条追加（真实/演示一致）；
-            //    - 已停止：丢弃继续到达的 partial/final（停止后不再产生新内容）。
+            //    - 未识别/已停止：丢弃继续到达的 partial/final（停止后不再产生新内容）。
             if running {
-                let partial_mode = match &mode {
-                    AsrMode::Local { partials } | AsrMode::Cloud { partials } => Some(partials),
-                    AsrMode::Mock => None,
+                let partial_mode = match mode.as_ref() {
+                    Some(AsrMode::Local { partials }) | Some(AsrMode::Cloud { partials }) => {
+                        Some(partials)
+                    }
+                    _ => None,
                 };
                 if let Some(partials) = partial_mode {
                     let texts: Vec<String> = partials.lock().unwrap().drain(..).collect();
@@ -362,11 +378,11 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                         emit(&handle, EngineEvent::PartialResult { text: last });
                     }
                 }
-                while let Some(utt) = asr.next_utterance() {
-                    append_utterance(&handle, &mut pipeline, &mut known_speakers, now, utt);
+                if let Some(asr_ref) = asr.as_mut() {
+                    drain_asr_inputs(asr_ref, &handle, &mut pipeline, &mut known_speakers, now);
                 }
-            } else {
-                discard_asr_inputs(&mut asr, &mode);
+            } else if let (Some(asr_ref), Some(mode_ref)) = (asr.as_mut(), mode.as_ref()) {
+                discard_asr_inputs(asr_ref, mode_ref);
             }
 
             // 4. 先收 LLM 结果（若已就绪）：回填/失败与下一次派发同拍完成。
@@ -467,6 +483,19 @@ fn discard_asr_inputs(asr: &mut Box<dyn AsrPort>, mode: &AsrMode) {
             partials.lock().unwrap().clear();
         }
         AsrMode::Mock => {}
+    }
+}
+
+/// 排空 ASR 已定稿的 final，逐条追加进整理管线（热切换/停止/识别共用）。
+fn drain_asr_inputs(
+    asr: &mut Box<dyn AsrPort>,
+    handle: &AppHandle,
+    pipeline: &mut CleanupPipeline,
+    known_speakers: &mut Vec<u32>,
+    now: Duration,
+) {
+    while let Some(utt) = asr.next_utterance() {
+        append_utterance(handle, pipeline, known_speakers, now, utt);
     }
 }
 

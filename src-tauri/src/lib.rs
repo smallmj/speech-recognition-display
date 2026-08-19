@@ -20,7 +20,9 @@ pub mod audio;
 mod bridge;
 mod cloud_asr;
 mod export;
+mod first_run;
 mod llm;
+mod model_paths;
 mod pipeline;
 mod sessions;
 
@@ -53,6 +55,11 @@ pub fn run() {
             asr_config::save_asr_config,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
+            first_run::load_first_run_config,
+            first_run::save_first_run_preferences,
+            first_run::complete_first_run,
+            first_run::reset_first_run,
+            first_run::run_first_run_setup,
             pipeline::start_session,
             pipeline::stop_session,
             export::export_session,
