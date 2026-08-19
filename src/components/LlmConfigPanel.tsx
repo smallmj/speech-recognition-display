@@ -20,6 +20,12 @@ export interface LlmConfig {
   persona: string | null;
 }
 
+/** 与 Rust `LlmModelSummary` 对齐。 */
+export interface LlmModelSummary {
+  id: string;
+  ownedBy?: string | null;
+}
+
 /**
  * 内置整理人设（与 Rust `src-tauri/src/llm.rs` 的 `DEFAULT_PERSONA` 保持一致；
  * **权威源在 Rust 端**，改动需两处同步；「恢复内置人设」按钮用）。
@@ -35,6 +41,8 @@ export default function LlmConfigPanel() {
   const [persona, setPersona] = useState("");
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [models, setModels] = useState<LlmModelSummary[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   // 挂载时读取已保存配置（未保存过 → Rust 端返回默认值）。
   useEffect(() => {
@@ -47,6 +55,24 @@ export default function LlmConfigPanel() {
       })
       .catch((e) => setStatus(`加载配置失败: ${e}`));
   }, []);
+
+  const loadModels = async () => {
+    setLoadingModels(true);
+    setStatus("正在获取模型列表…");
+    try {
+      const result = await invoke<LlmModelSummary[]>("list_llm_models", {
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+      });
+      setModels(result);
+      setStatus(`已获取 ${result.length} 个模型`);
+    } catch (e) {
+      setModels([]);
+      setStatus(`获取模型列表失败: ${String(e)}`);
+    } finally {
+      setLoadingModels(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -100,15 +126,40 @@ export default function LlmConfigPanel() {
               spellCheck={false}
             />
           </label>
-          <label className="llm-field">
+          <div className="llm-field">
             <span>模型名</span>
-            <input
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="gpt-4o-mini"
-              spellCheck={false}
-            />
-          </label>
+            <div className="llm-model-row">
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="gpt-4o-mini"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className="llm-load-models"
+                onClick={loadModels}
+                disabled={loadingModels}
+              >
+                {loadingModels ? "获取中…" : "获取模型列表"}
+              </button>
+            </div>
+            {models.length > 0 && (
+              <select
+                value={models.some((item) => item.id === model) ? model : ""}
+                onChange={(e) => setModel(e.target.value)}
+                aria-label="选择 API 模型"
+              >
+                <option value="">选择 API 模型…</option>
+                {models.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.id}
+                    {item.ownedBy ? ` · ${item.ownedBy}` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
           <label className="llm-field">
             <span>整理人设（留空使用内置预设）</span>
             <textarea

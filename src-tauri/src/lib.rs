@@ -10,7 +10,8 @@
 //! T4 + T9 整合后主事件源为 [crate::pipeline::spawn_engine_emitter]：
 //! 真实 ASR（sherpa-onnx + 麦克风，失败回退合成转写）→ 整理管线 →
 //! 真实 OpenAI 兼容 LLM（SSE 流式）→ 双轨事件流；另注册 LLM 配置命令
-//! （[crate::llm::load_llm_config] / [crate::llm::save_llm_config]）。
+//! （[crate::llm::load_llm_config] / [crate::llm::save_llm_config]）
+//! 与模型列表命令（[crate::llm::list_llm_models]）。
 
 pub mod audio;
 mod asr;
@@ -37,7 +38,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping_ack,
             llm::load_llm_config,
-            llm::save_llm_config
+            llm::save_llm_config,
+            llm::list_llm_models
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

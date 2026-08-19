@@ -54,10 +54,50 @@
   line-height: 1.5;
 }
 
+.llm-model-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.llm-model-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.llm-model-row button,
+.llm-field select {
+  border: 1px solid rgba(79, 140, 255, 0.5);
+  background: rgba(79, 140, 255, 0.1);
+  color: #2f6fe4;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.llm-model-row button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.llm-field select {
+  width: fit-content;
+  max-width: 100%;
+}
+
 @media (prefers-color-scheme: dark) {
   .llm-field input,
-  .llm-field textarea {
+  .llm-field textarea,
+  .llm-field select {
     background: rgba(0, 0, 0, 0.25);
+    color: inherit;
+  }
+
+  .llm-model-row button {
+    background: rgba(79, 140, 255, 0.18);
   }
 }
 
