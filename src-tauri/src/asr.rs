@@ -65,6 +65,8 @@ impl SherpaAsr {
         // T5：说话人 speaker embedding 模型（3d-speaker 等）可选；缺失时 SCD 降级为单说话人。
         let embedding_dir = Self::resolve_embedding_model_dir(handle);
         let scd_configured = embedding_dir.is_some();
+        // Python/脚本路径统一走 model_paths::runtime_paths（已在内部处理
+        // Windows Scripts/python.exe vs Unix bin/python3 的平台差异）。
         let runtime = crate::model_paths::runtime_paths(handle)?;
         let python = runtime.python;
         let script = runtime.script;
@@ -346,9 +348,23 @@ fn read_stdout(
     use std::io::{BufRead, BufReader};
     // 每条 final 的唯一序号：SCD 追溯修正（SpeakerCorrection）引用它。
     let mut next_utt_seq: u64 = 0;
-    let reader = BufReader::new(stdout);
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
+    let mut reader = BufReader::new(stdout);
+    // 用 read_until（字节级）而非 lines()：lines()/read_line 在遇到非 UTF-8 字节时
+    // 返回 Err 并 break 整个循环（Python sidecar 的中文输出若含无效 UTF-8 会导致
+    // 读取线程提前退出，后续 partial/final 全部丢失）。read_until 按 \n 切分原始
+    // 字节，UTF-8 解码失败时丢弃该行继续读取。
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        match reader.read_until(b'\n', &mut raw) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        let Ok(line) = std::str::from_utf8(&raw) else {
+            eprintln!("[asr] 丢弃无法解码的 sidecar 行");
+            continue;
+        };
         let line = line.trim();
         if line.is_empty() {
             continue;

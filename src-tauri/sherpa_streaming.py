@@ -104,13 +104,17 @@ class StreamingRecognizer:
         tokens = self.model_dir / "tokens.txt"
         bpe = self.model_dir / "bpe.model"
 
-        if not all(p.is_file() for p in (encoder, decoder, joiner, tokens, bpe)):
+        if not all(p.is_file() for p in (encoder, decoder, joiner, tokens)):
             raise FileNotFoundError(
                 f"流式模型文件不完整，期望 {self.model_dir} 内含 "
-                "encoder/decoder/joiner 的 .onnx（可带 int8/epoch 后缀）+ tokens.txt + bpe.model"
+                "encoder/decoder/joiner 的 .onnx（可带 int8/epoch 后缀）+ tokens.txt"
             )
 
-        self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+        # BPE 模型需要 bpe.model；CJK 字符模型（无 bpe.model）用 modeling_unit="cjk"
+        bpe = self.model_dir / "bpe.model"
+        has_bpe = bpe.is_file()
+
+        recognizer_kwargs = dict(
             tokens=str(tokens),
             encoder=str(encoder),
             decoder=str(decoder),
@@ -119,13 +123,18 @@ class StreamingRecognizer:
             sample_rate=int(sample_rate),
             feature_dim=80,
             decoding_method="greedy_search",
-            modeling_unit="bpe",
-            bpe_vocab=str(bpe),
             enable_endpoint_detection=True,
             rule1_min_trailing_silence=1.2,
             rule2_min_trailing_silence=0.6,
             rule3_min_utterance_length=12.0,
         )
+        if has_bpe:
+            recognizer_kwargs["modeling_unit"] = "bpe"
+            recognizer_kwargs["bpe_vocab"] = str(bpe)
+        else:
+            recognizer_kwargs["modeling_unit"] = "cjk"
+
+        self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(**recognizer_kwargs)
         self.stream = self.recognizer.create_stream()
 
     # -- feed + decode ------------------------------------------------------
@@ -261,8 +270,15 @@ class SpeakerEmbedder:
 
 
 def emit(obj: dict):
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    # 强制 UTF-8 输出到 stdout.buffer：Windows 的 sys.stdout 默认编码是 GBK/cp1252，
+    # 用 write() 会让中文按本地编码输出（Rust 端按 UTF-8 解码失败 → 丢弃整行）。
+    sys.stdout.buffer.write(json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
+    try:
+        sys.stdout.buffer.flush()
+    except OSError:
+        # Windows 管道模式下 flush 可能报 Invalid argument，忽略即可
+        # （数据已 write 到内核缓冲区，Tauri 端 read 时会正常收到）
+        pass
 
 
 def final_event(text: str, seg_samples: np.ndarray | None, embedder: SpeakerEmbedder | None, sample_rate: int = 16000) -> dict:

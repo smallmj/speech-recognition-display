@@ -18,6 +18,8 @@ pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 /// 打开麦克风并把 16kHz 单声道 f32 音频块发送到 `tx`。
 ///
 /// 返回 (采集句柄, 设备采样率)。句柄持有时流存活；drop 即停止采集。
+///
+/// 采样格式：优先 f32，其次 i16/u16（macOS 常见 F32）；其他格式返回错误。
 pub fn start_mic_capture(tx: mpsc::Sender<Vec<f32>>) -> Result<(MicCapture, u32), String> {
     let host = cpal::default_host();
     let device = host
@@ -30,6 +32,10 @@ pub fn start_mic_capture(tx: mpsc::Sender<Vec<f32>>) -> Result<(MicCapture, u32)
     let channels = config.channels() as usize;
 
     let sample_format = config.sample_format();
+    // cpal 0.18 的 DeviceTrait 没有 name() 方法，用 Display trait 获取设备名
+    println!("[audio] 设备: {device}");
+
+    println!("[audio] 采样格式: {sample_format:?}, 采样率: {src_rate}Hz, 通道数: {channels}");
     let stream = match sample_format {
         cpal::SampleFormat::F32 => build_stream::<f32>(&device, &config.into(), channels, src_rate, tx),
         cpal::SampleFormat::I16 => build_stream::<i16>(&device, &config.into(), channels, src_rate, tx),
