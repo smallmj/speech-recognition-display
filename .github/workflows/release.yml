@@ -106,7 +106,7 @@ jobs:
           > 免签名版：macOS 与 Windows 首次安装会收到系统安全提示，按下方说明放行即可。
 
           ### macOS
-          - Apple Silicon 选 `*_aarch64.dmg`，Intel 选 `*_x86_64.dmg`
+          - Apple Silicon 选 `*_aarch64.dmg`，Intel 选 `*_x64.dmg`
           - 安装：打开 DMG，把「TalkSee」拖入「应用程序」，然后首次打开时
             **右键点应用 → 打开 → 确认**（未签名/未公证应用的常规放行方式）。
 

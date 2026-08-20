@@ -145,7 +145,7 @@ pnpm tauri dev          # 启动开发模式
 | 平台 | 安装包 | 说明 |
 |------|--------|------|
 | macOS（Apple Silicon） | `TalkSee_*_aarch64.dmg` | 打开 DMG，把 TalkSee 拖入「应用程序」 |
-| macOS（Intel） | `TalkSee_*_x86_64.dmg` | 同上 |
+| macOS（Intel） | `TalkSee_*_x64.dmg` | 同上 |
 | Windows | `TalkSee_*_x64-setup.exe` | NSIS 一键安装 |
 
 > **免签名版**：代码签名/公证尚未启用，首次安装会收到系统安全提示，按下面放行即可。
