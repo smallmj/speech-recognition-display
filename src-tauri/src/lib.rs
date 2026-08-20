@@ -61,7 +61,10 @@ pub fn run() {
             // T13 关闭按钮 → 隐藏到托盘（不退出进程），真正退出走托盘菜单「退出」。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                crate::tray::log_tray(window.app_handle(), "CloseRequested -> prevent_close + hide");
+                if let Err(err) = window.hide() {
+                    crate::tray::log_tray(window.app_handle(), &format!("隐藏窗口失败: {err}"));
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -91,6 +94,21 @@ pub fn run() {
             sessions::load_session,
             sessions::export_session_file
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            // macOS：点 Dock 图标触发 `applicationShouldHandleReopen`（RunEvent::Reopen）。
+            // 主窗口被隐藏（关闭→托盘）时 macOS 不会自动恢复隐藏窗口，只会激活应用，
+            // 必须在这里主动唤回——否则会表现为「点 Dock 图标窗口打不开」。
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                if !has_visible_windows {
+                    tray::show_main_window(app_handle);
+                }
+            }
+            _ => {}
+        });
 }
