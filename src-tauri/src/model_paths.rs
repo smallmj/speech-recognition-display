@@ -21,10 +21,21 @@ pub struct RuntimePaths {
     pub script: PathBuf,
 }
 
-/// 解析 Python venv 内的解释器路径（Windows 用 Scripts，其余用 bin）。
+/// 解析 Python 运行时内的解释器路径。
+///
+/// 支持两种布局：
+/// - 标准 venv：Windows 用 `Scripts/python.exe`，其余用 `bin/python3`；
+/// - python-build-standalone 直接解压（正式分发）：解释器在 Windows 位于
+///   venv 根目录 `python.exe`（unix 仍是 `bin/python3`），见
+///   `scripts/package-runtime.mjs`。
 fn venv_python(venv: &Path) -> PathBuf {
     if cfg!(windows) {
-        venv.join("Scripts").join("python.exe")
+        let scripts = venv.join("Scripts").join("python.exe");
+        if scripts.is_file() {
+            scripts
+        } else {
+            venv.join("python.exe")
+        }
     } else {
         let python3 = venv.join("bin").join("python3");
         if python3.is_file() {
@@ -73,12 +84,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn venv_python_is_platform_shaped() {
-        let p = venv_python(Path::new("/tmp/venv"));
+    fn venv_python_prefers_existing_layout() {
+        let tmp = std::env::temp_dir().join(format!("talksee-venv-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
         if cfg!(windows) {
-            assert_eq!(p, PathBuf::from("/tmp/venv/Scripts/python.exe"));
+            // 标准 venv 布局（Scripts/python.exe）优先
+            std::fs::create_dir_all(tmp.join("Scripts")).unwrap();
+            std::fs::write(tmp.join("Scripts").join("python.exe"), b"").unwrap();
+            assert_eq!(venv_python(&tmp), tmp.join("Scripts").join("python.exe"));
+            // 只有根目录 python.exe（python-build-standalone 布局）时回退
+            let root_only = tmp.join("root-only");
+            std::fs::create_dir_all(&root_only).unwrap();
+            std::fs::write(root_only.join("python.exe"), b"").unwrap();
+            assert_eq!(venv_python(&root_only), root_only.join("python.exe"));
         } else {
-            assert!(p.starts_with("/tmp/venv/bin"));
+            // bin/python3 优先
+            std::fs::create_dir_all(tmp.join("bin")).unwrap();
+            std::fs::write(tmp.join("bin").join("python3"), b"").unwrap();
+            assert_eq!(venv_python(&tmp), tmp.join("bin").join("python3"));
+            // 只有 bin/python 时回退
+            let fallback = tmp.join("fallback");
+            std::fs::create_dir_all(fallback.join("bin")).unwrap();
+            std::fs::write(fallback.join("bin").join("python"), b"").unwrap();
+            assert_eq!(venv_python(&fallback), fallback.join("bin").join("python"));
         }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
