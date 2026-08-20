@@ -1,6 +1,6 @@
 # T5 实现总结 — 说话人切换检测（SCD）
 
-> Issue: [#6](https://github.com/smallmj/speech-recognition-display/issues/6)（OPEN）
+> Issue: [#6](https://github.com/smallmj/talksee/issues/6)（OPEN）
 > 分支: `feat/t5-scd`（基于 main = b4c8d1c，PR #16 已 rebase 到最新 main）
 > 核心实现：`engine/src/scd.rs`（说话人模板 + speaker embedding 余弦匹配 + 自动编号 + 性别降级决策）
 > 方案对齐：[ADR-0002](docs/adr/0002-local-streaming-asr-and-self-built-scd.md)（VAD 切句 +

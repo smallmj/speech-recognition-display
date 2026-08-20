@@ -1,6 +1,6 @@
 # T11 实现总结：会话历史与导出
 
-> Issue: [#12](https://github.com/smallmj/speech-recognition-display/issues/12)
+> Issue: [#12](https://github.com/smallmj/talksee/issues/12)
 > 依赖：T10（会议纪要）已完成。
 
 ## 实现内容
@@ -14,7 +14,7 @@
     并展示该会话的字幕记录与会议纪要。
 - **导出 Markdown / TXT / SRT**：
   - `sessions::export_session_file(app, id, format)`：从本地记录生成并写入系统文档
-    目录 `语音识别展示系统-导出/会话记录-<id>.<ext>`；
+    目录 `TalkSee-导出/会话记录-<id>.<ext>`；
   - Markdown：字幕记录（整理版优先，无整理版回退原文）+ 会议纪要；
   - TXT：纯文本同构导出；
   - SRT：逐条字幕带时间码（结束时间取下一条开始时间，最后一条 +5s）。

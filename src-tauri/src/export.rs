@@ -1,6 +1,6 @@
 //! 会话导出（T10/T11）：把整理后的字幕文本与会议纪要写为 Markdown 文件。
 //!
-//! 文件落在系统文档目录下的 `语音识别展示系统-导出/`，文件名带时间戳，
+//! 文件落在系统文档目录下的 `TalkSee-导出/`，文件名带时间戳，
 //! 避免覆盖历史导出。真实命令（[export_session]）只做路径解析，写文件逻辑
 //! 在可测的 [export_session_to_dir]（TDD 测试缝）。
 
@@ -34,7 +34,7 @@ pub fn export_session_to_dir(
     Ok(path)
 }
 
-/// 前端导出命令：写入系统文档目录下的 `语音识别展示系统-导出/`。
+/// 前端导出命令：写入系统文档目录下的 `TalkSee-导出/`。
 #[tauri::command]
 pub fn export_session(
     app: AppHandle,
@@ -45,7 +45,7 @@ pub fn export_session(
         .path()
         .document_dir()
         .map_err(|e| format!("无法定位系统文档目录: {e}"))?
-        .join("语音识别展示系统-导出");
+        .join("TalkSee-导出");
     export_session_to_dir(&transcript, &minutes, &dir).map(|path| path.display().to_string())
 }
 

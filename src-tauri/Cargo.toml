@@ -1,12 +1,12 @@
 [package]
-name = "speech-caption-display"
+name = "talksee"
 description = "听障实时字幕展示系统 — Tauri 壳（薄胶水层）"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 
 [lib]
-name = "speech_caption_display_lib"
+name = "talksee_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

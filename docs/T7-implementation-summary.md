@@ -1,6 +1,6 @@
 # T7 实现总结 - 云端 ASR 可切换
 
-> Issue: [#8](https://github.com/smallmj/speech-recognition-display/issues/8)
+> Issue: [#8](https://github.com/smallmj/talksee/issues/8)
 > 决策：[ADR-0004](./adr/0004-switchable-cloud-asr.md)
 
 ## 实现内容
@@ -23,9 +23,9 @@
 
 ## 测试
 
-- `cargo test -p speech-caption-display cloud_asr`：7 个协议/URL/鉴权/采样转换/队列测试通过；
-- `cargo test -p speech-caption-display asr_config`：4 个配置默认值、序列化、降级与兼容测试通过；
-- `cargo test -p speech-caption-display pipeline::tests`：4 个热切换决策测试通过；
+- `cargo test -p talksee cloud_asr`：7 个协议/URL/鉴权/采样转换/队列测试通过；
+- `cargo test -p talksee asr_config`：4 个配置默认值、序列化、降级与兼容测试通过；
+- `cargo test -p talksee pipeline::tests`：4 个热切换决策测试通过；
 - `cargo test`：workspace 全量测试通过（engine 41 个 + 壳层 27 个 + doctest 忽略项）。
 - `pnpm build`：TypeScript 类型检查与 Vite 构建通过。
 - `pnpm check:focus-exit`：通过。

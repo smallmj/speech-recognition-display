@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SpeechCaptionDisplay",
+  "productName": "TalkSee",
   "version": "0.2.0",
-  "identifier": "com.smallmj.speech-caption-display",
+  "identifier": "com.smallmj.talksee",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "实时字幕展示",
+        "title": "语见 · TalkSee",
         "width": 960,
         "height": 720,
         "minWidth": 480,

@@ -8,7 +8,7 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use speech_caption_display_lib::audio::start_mic_capture;
+use talksee_lib::audio::start_mic_capture;
 
 fn main() {
     let (tx, rx) = mpsc::channel();
