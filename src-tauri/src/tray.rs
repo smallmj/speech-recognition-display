@@ -3,7 +3,9 @@
 //! 职责（薄胶水层，不承载业务逻辑）：
 //! - **托盘图标**：`TrayIconBuilder`（Tauri 2 内置 `tray-icon` feature）创建常驻
 //!   托盘，右键菜单含「显示主窗口 / 隐藏主窗口 / ▶ 开始识别 / ⏸ 停止识别并生成纪要
-//!   / 退出」，左键单击切换主窗口显示/隐藏；点关闭按钮只是隐藏窗口，进程与托盘常驻。
+//!   / 退出」，**左键单击始终唤出并聚焦主窗口**（不做显隐切换——避免可见性判断的
+//!   时序竞态导致"点一下反而隐藏、窗口打不开"）；隐藏统一走「关闭按钮（隐藏到托盘）」
+//!   或托盘菜单/热键的「隐藏」。
 //! - **会话状态镜像**：监听 `engine://event`（[crate::pipeline::ENGINE_EVENT]），
 //!   按 `SessionStarted` / `SessionStopped` / `MinutesReady` 更新托盘 tooltip 与
 //!   菜单项文本/可用性——与前端状态徽章同源（同一个事件流），保证界面与托盘一致。
@@ -162,7 +164,7 @@ fn build_tray(
                 ..
             } = event
             {
-                toggle_main_window(tray.app_handle());
+                handle_tray_left_click(tray.app_handle());
             }
         })
         .build(app)?;
@@ -223,29 +225,110 @@ fn stop_recognition(app: &AppHandle) {
     let _ = pipeline::stop_session(control);
 }
 
-/// 左键单击托盘：主窗口可见则隐藏，隐藏则唤出聚焦（复用 [show_main_window]）。
-fn toggle_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
-        } else {
-            show_main_window(app);
-        }
+/// 托盘诊断日志路径（`app_data_dir/tray.log`；解析失败回退到临时目录）。
+///
+/// 记录关闭/隐藏/唤出/托盘点击等桌面集成关键事件，便于定位「关窗后托盘无法再次
+/// 打开」这类问题（GUI 应用 stdout 不可见，落盘最可靠）。
+static TRAY_LOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// 写一条托盘生命周期诊断日志（见 [TRAY_LOG_PATH]）。
+pub(crate) fn log_tray(app: &AppHandle, msg: &str) {
+    use std::io::Write;
+    let path = TRAY_LOG_PATH
+        .get_or_init(|| {
+            app.path()
+                .app_data_dir()
+                .map(|dir| dir.join("tray.log"))
+                .unwrap_or_else(|_| std::env::temp_dir().join("speech-caption-tray.log"))
+        })
+        .clone();
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "?".into());
+        let _ = writeln!(f, "[{ts}] {msg}");
     }
 }
 
+/// 托盘左键单击：始终唤出并聚焦主窗口（不做显隐切换）。
+///
+/// 不做显隐切换的原因：关闭→隐藏刚完成时 `is_visible` 存在时序竞态（可能短暂
+/// 为 true），若据此做 toggle，用户点一下反而把窗口隐藏，会表现为"窗口打不开"。
+/// 隐藏统一走「关闭按钮」或托盘菜单/热键的「隐藏」。
+fn handle_tray_left_click(app: &AppHandle) {
+    log_tray(app, "tray left-click -> show_main_window");
+    show_main_window(app);
+}
+
 /// 唤出主窗口：取消最小化 → 显示 → 聚焦（供托盘菜单 / 热键 / 单实例回调复用）。
+///
+/// **加固**：窗口不存在时重建（覆盖极端情况下窗口被销毁的场景，保证总能唤回）；
+/// `set_focus` 在 macOS 上仅在窗口 `is_visible` 时才真正生效，故立即调一次并稍后
+/// 重试一次，覆盖 show 的异步时序；所有失败落诊断日志。
 pub(crate) fn show_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+    let window = match app.get_webview_window("main") {
+        Some(w) => w,
+        None => match rebuild_main_window(app) {
+            Ok(w) => {
+                log_tray(app, "主窗口不存在，已重建");
+                w
+            }
+            Err(err) => {
+                log_tray(app, &format!("重建主窗口失败: {err}"));
+                eprintln!("[tray] 重建主窗口失败: {err}");
+                return;
+            }
+        },
+    };
+
+    if let Err(err) = window.unminimize() {
+        log_tray(app, &format!("unminimize 失败: {err}"));
     }
+    if let Err(err) = window.show() {
+        log_tray(app, &format!("show 失败: {err}"));
+    }
+    if let Err(err) = window.set_focus() {
+        log_tray(app, &format!("set_focus 失败: {err}"));
+    }
+    // 延迟重试：macOS 的 set_focus 依赖窗口 is_visible 状态，show 后立即调用可能
+    // 因时序未生效；250ms 后再确认一次，不可见则补一次 show + focus。
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if let Some(w) = app2.get_webview_window("main") {
+            if w.is_visible().unwrap_or(false) {
+                let _ = w.set_focus();
+            } else {
+                log_tray(&app2, "重试：show 后窗口仍不可见，再次 show+focus");
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }
+    });
+    log_tray(app, "show_main_window 完成");
 }
 
 /// 隐藏主窗口（托盘常驻，窗口消失但进程与托盘仍在）。
 pub(crate) fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+        if let Err(err) = window.hide() {
+            log_tray(app, &format!("hide 失败: {err}"));
+        }
     }
+    log_tray(app, "hide_main_window");
+}
+
+/// 重建主窗口（`get_webview_window("main")` 取不到时兜底）。
+///
+/// 配置与 `tauri.conf.json` 的窗口保持一致（label/title/尺寸/可缩放），URL 用
+/// `WebviewUrl::App("index.html")`——开发模式解析到 devUrl，打包模式用内嵌前端。
+fn rebuild_main_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("实时字幕展示")
+        .inner_size(960.0, 720.0)
+        .min_inner_size(480.0, 320.0)
+        .resizable(true)
+        .build()
 }

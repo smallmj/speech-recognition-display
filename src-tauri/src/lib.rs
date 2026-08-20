@@ -61,7 +61,10 @@ pub fn run() {
             // T13 关闭按钮 → 隐藏到托盘（不退出进程），真正退出走托盘菜单「退出」。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                crate::tray::log_tray(window.app_handle(), "CloseRequested -> prevent_close + hide");
+                if let Err(err) = window.hide() {
+                    crate::tray::log_tray(window.app_handle(), &format!("隐藏窗口失败: {err}"));
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
