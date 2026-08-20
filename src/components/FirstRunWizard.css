@@ -21,6 +21,16 @@
 
 .first-run-header {
   margin-bottom: 20px;
+  text-align: center;
+}
+
+.first-run-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  margin: 0 auto 14px;
+  display: block;
+  user-select: none;
 }
 
 .first-run-title {

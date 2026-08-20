@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { subscribe } from "../tauriEvent";
+import logoMark from "../../brand/logo-mark-256.png";
 import type { AsrConfig } from "./AsrConfigPanel";
 import {
   MODEL_PROGRESS_EVENT,
@@ -286,6 +287,7 @@ export default function FirstRunWizard({ onComplete, onLater }: FirstRunWizardPr
     <div className="first-run-screen">
       <div className="first-run-panel">
         <header className="first-run-header">
+          <img src={logoMark} alt="" className="first-run-logo" />
           <h1 className="first-run-title">首次运行初始化</h1>
           <p className="first-run-subtitle">
             选择识别模型并检测运行环境；每完成一项自动打钩，确认后进入主界面。

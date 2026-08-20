@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import logoMark from "../brand/logo-mark-256.png";
 import DualTrackView, {
   reduceEvents,
   useEngineEvents,
@@ -322,6 +323,7 @@ export default function App() {
     <DisplayContext.Provider value={display}>
       <div className="app">
         <header className="app-header">
+          <img src={logoMark} alt="" className="app-logo" />
           <h1>语见 · 实时字幕</h1>
           <span className={`badge ${bridgeReady ? "badge-on" : "badge-off"}`}>
             {bridgeReady ? "事件桥已接通" : "等待事件桥…"}

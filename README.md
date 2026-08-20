@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo-horizontal-dark.png">
+    <img alt="语见 TalkSee · 让对话，看得见" src="brand/logo-horizontal-light.png" width="440">
+  </picture>
+</p>
+
 # 语见（TalkSee）— 听障实时字幕展示系统
 
 > **让对话，看得见。** TalkSee（语见）——为听障人士在面对面多人对话中提供**实时字幕**的跨平台桌面应用（macOS / Windows）。
