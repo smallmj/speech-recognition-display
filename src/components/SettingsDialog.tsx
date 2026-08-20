@@ -8,7 +8,7 @@
  * - 显示：主题 / 字号 / 字体 / 文字颜色 / 置顶大字，localStorage 持久化 + 即时应用。
  * - 快捷键：当前窗口内可用操作与按键说明 + T13 全局热键 / 托盘操作。
  * - 历史：嵌入会话历史面板（列表 + 重新打开 + 导出）。
- * - 关于：版本 / 技术栈 / 规格与实现索引。
+ * - 关于：版本 / 项目仓库 / 技术栈与运行时 / 隐私说明。
  */
 
 import { useEffect, useState } from "react";
@@ -25,6 +25,7 @@ import AsrConfigPanel from "./AsrConfigPanel";
 import ModelCatalogPanel from "./ModelCatalogPanel";
 import LlmConfigPanel from "./LlmConfigPanel";
 import SessionHistoryPanel from "./SessionHistoryPanel";
+import { getVersion } from "@tauri-apps/api/app";
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -95,6 +96,14 @@ export default function SettingsDialog({
   }, [open, initialTab, onInitialTabConsumed]);
   const { settings, setTheme, setFocusMode, setFontSize, setFontFamily, setTextColor } =
     useDisplaySettings();
+
+  // 关于页：动态读取应用版本（与 Cargo.toml / tauri.conf.json 保持一致，避免硬编码漂移）。
+  const [appVersion, setAppVersion] = useState("0.1.0");
+  useEffect(() => {
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion("0.1.0"));
+  }, []);
 
   if (!open) return null;
 
@@ -368,35 +377,37 @@ export default function SettingsDialog({
               <section className="settings-tab-section">
                 <div className="settings-panel-section">
                   <p className="settings-panel-section-title">版本</p>
-                  <p className="settings-about-line">语音识别展示系统 v0.1.0（听障实时字幕气泡展示系统 MVP）。</p>
-                </div>
-
-                <hr className="settings-panel-divider" />
-
-                <div className="settings-panel-section">
-                  <p className="settings-panel-section-title">技术栈</p>
                   <p className="settings-about-line">
-                    Tauri 2 + React 18 + Rust engine 核心库；本地 sherpa-onnx 流式 ASR /
-                    Deepgram 兼容云端 ASR / OpenAI 兼容 LLM（SSE 流式整理 + 会议纪要）。
+                    语音识别展示系统 v{appVersion}（听障实时字幕展示 MVP）。
                   </p>
                 </div>
 
                 <hr className="settings-panel-divider" />
 
                 <div className="settings-panel-section">
-                  <p className="settings-panel-section-title">数据与配置</p>
+                  <p className="settings-panel-section-title">项目仓库</p>
                   <p className="settings-about-line">
-                    显示设置保存在浏览器本地；ASR / LLM / 常规设置保存在系统应用配置目录；
-                    会话历史保存在系统应用数据目录，均可随应用卸载清理。
+                    github.com/smallmj/speech-recognition-display
                   </p>
                 </div>
 
                 <hr className="settings-panel-divider" />
 
                 <div className="settings-panel-section">
-                  <p className="settings-panel-section-title">规格与实现</p>
+                  <p className="settings-panel-section-title">技术栈与运行时</p>
                   <p className="settings-about-line">
-                    依据规格 Issue #1 与 T1–T13 任务拆解实现；本设置界面为 T12。
+                    Tauri 2 + React 18 + Rust engine；Python sherpa-onnx 本地流式 ASR、
+                    Deepgram 兼容云端 ASR、OpenAI 兼容 LLM（SSE 流式整理 + 会议纪要）。
+                    说话人区分基于 speaker embedding（ERes2NetV2）。
+                  </p>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">隐私说明</p>
+                  <p className="settings-about-line">
+                    默认使用本地识别，音频与文字不出本机；云端 ASR / LLM 仅在设置中启用并配置后才会联网。
                   </p>
                 </div>
               </section>
