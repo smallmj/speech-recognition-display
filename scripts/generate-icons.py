@@ -10,7 +10,7 @@ TalkSee / 语见 — 图标资源批量生成器
   rsvg-convert（librsvg）· iconutil（macOS 自带）· ImageMagick（magick）· Pillow（python3 -m pip install Pillow）
 """
 from pathlib import Path
-import subprocess, shutil, sys
+import subprocess, shutil
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +25,7 @@ BRAND_DIR.mkdir(parents=True, exist_ok=True)
 # Tauri 2 标配图标尺寸
 TAURI_SIZES = [
     ("32x32.png", 32),
+    ("64x64.png", 64),
     ("128x128.png", 128),
     ("128x128@2x.png", 256),
     ("icon.png", 1024),
@@ -54,6 +55,50 @@ for name, size in TAURI_SIZES:
     rsvg(size, out)
     print(f"  ✓ {name:30s} {size}x{size:<4d} ({out.stat().st_size:>6d} bytes)")
 
+# --- 1.5 移动端图标（android / ios） ------------------------------------
+# 桌面应用目前未启用移动端打包，但保留全套尺寸保持仓库一致；尺寸取自 tauri icon 默认模板。
+print("\n== 渲染移动端图标 ==")
+MOBILE_SIZES = {
+    "android/mipmap-mdpi/ic_launcher.png": 48,
+    "android/mipmap-mdpi/ic_launcher_round.png": 48,
+    "android/mipmap-mdpi/ic_launcher_foreground.png": 108,
+    "android/mipmap-hdpi/ic_launcher.png": 49,
+    "android/mipmap-hdpi/ic_launcher_round.png": 49,
+    "android/mipmap-hdpi/ic_launcher_foreground.png": 162,
+    "android/mipmap-xhdpi/ic_launcher.png": 96,
+    "android/mipmap-xhdpi/ic_launcher_round.png": 96,
+    "android/mipmap-xhdpi/ic_launcher_foreground.png": 216,
+    "android/mipmap-xxhdpi/ic_launcher.png": 144,
+    "android/mipmap-xxhdpi/ic_launcher_round.png": 144,
+    "android/mipmap-xxhdpi/ic_launcher_foreground.png": 324,
+    "android/mipmap-xxxhdpi/ic_launcher.png": 192,
+    "android/mipmap-xxxhdpi/ic_launcher_round.png": 192,
+    "android/mipmap-xxxhdpi/ic_launcher_foreground.png": 432,
+    "ios/AppIcon-20x20@1x.png": 20,
+    "ios/AppIcon-20x20@2x.png": 40,
+    "ios/AppIcon-20x20@2x-1.png": 40,
+    "ios/AppIcon-20x20@3x.png": 60,
+    "ios/AppIcon-29x29@1x.png": 29,
+    "ios/AppIcon-29x29@2x.png": 58,
+    "ios/AppIcon-29x29@2x-1.png": 58,
+    "ios/AppIcon-29x29@3x.png": 87,
+    "ios/AppIcon-40x40@1x.png": 40,
+    "ios/AppIcon-40x40@2x.png": 80,
+    "ios/AppIcon-40x40@2x-1.png": 80,
+    "ios/AppIcon-40x40@3x.png": 120,
+    "ios/AppIcon-60x60@2x.png": 120,
+    "ios/AppIcon-60x60@3x.png": 180,
+    "ios/AppIcon-76x76@1x.png": 76,
+    "ios/AppIcon-76x76@2x.png": 152,
+    "ios/AppIcon-83.5x83.5@2x.png": 167,
+    "ios/AppIcon-512@2x.png": 1024,
+}
+for rel, size in sorted(MOBILE_SIZES.items()):
+    out = ICONS_DIR / rel
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rsvg(size, out)
+    print(f"  ✓ {rel:45s} {size}x{size:<4d} ({out.stat().st_size:>6d} bytes)")
+
 # --- 2. 渲染 1024 主源(供 .icns / .ico 打包) ------------------------------
 MAIN_PNG = ROOT / "brand" / "icon-source-1024.png"
 rsvg(1024, MAIN_PNG)
@@ -64,7 +109,7 @@ print("\n== 打包 .icns ==")
 ICNSET = ROOT / "build" / "talksee.iconset"
 if ICNSET.exists():
     shutil.rmtree(ICNSET)
-ICNSET.mkdir()
+ICNSET.mkdir(parents=True, exist_ok=True)
 
 # iconutil 要求的 .iconset 命名约定
 iconset_layout = [
