@@ -351,6 +351,9 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                     true
                 };
                 if startable {
+                    // 清掉残留的 stop_requested：全局热键/按钮可能在「已停止」状态下
+                    // 也发出停止信号，若不清理，新会话开始的同一拍会立刻被误停。
+                    control.stop_requested.store(false, Ordering::Relaxed);
                     // 停止期间 ASR 可能仍积累 final：丢弃，避免旧会话内容混入新会话。
                     if let (Some(asr_ref), Some(mode_ref)) = (asr.as_mut(), mode.as_ref()) {
                         discard_asr_inputs(asr_ref, mode_ref);
@@ -382,7 +385,14 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 // 把停止瞬间已在缓冲的 final 全部收进管线，再冻结剩余 active。
                 drain_asr_inputs(asr_ref, &handle, &mut pipeline, &mut known_speakers, now);
                 let frozen = pipeline.freeze_all_active();
-                println!("[session] 停止识别：冻结 {frozen} 条剩余片段，进入纪要流程");
+                // T13：真正停掉 ASR / 释放麦克风——「停止识别」后不再采集，整理与
+                // 纪要阶段也不让麦克风/ASR sidecar 继续空转（此前只置 running=false，
+                // ASR 对象一直存活、麦克风持续打开）。
+                asr.take().expect("识别中 ASR 必须已启动").stop();
+                mode = None;
+                println!(
+                    "[session] 停止识别：冻结 {frozen} 条剩余片段，已释放 ASR/麦克风，进入纪要流程"
+                );
                 running = false;
                 stopping = true;
             }

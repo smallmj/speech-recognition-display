@@ -1,11 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口默认能力：事件监听 + 应用自定义命令",
+  "description": "主窗口默认能力：事件监听 + 应用自定义命令 + 托盘/全局热键（T13，Rust 侧使用，预留给前端 IPC 权限）",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:event:default",
-    "core:window:allow-set-always-on-top"
+    "core:window:allow-set-always-on-top",
+    "core:tray:default",
+    "core:app:default",
+    "global-shortcut:default"
   ]
 }

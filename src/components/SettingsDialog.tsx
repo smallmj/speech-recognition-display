@@ -6,7 +6,7 @@
  *   即时生效（规格 #21、#42）。
  * - ASR / LLM 整理：嵌入既有面板（embedded 模式，无折叠按钮、始终展开表单）。
  * - 显示：主题 / 字号 / 字体 / 文字颜色 / 置顶大字，localStorage 持久化 + 即时应用。
- * - 快捷键：当前窗口内可用操作与按键说明（全局热键 / 托盘常驻由 T13 提供）。
+ * - 快捷键：当前窗口内可用操作与按键说明 + T13 全局热键 / 托盘操作。
  * - 历史：嵌入会话历史面板（列表 + 重新打开 + 导出）。
  * - 关于：版本 / 技术栈 / 规格与实现索引。
  */
@@ -59,14 +59,17 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "about", label: "关于" },
 ];
 
-/** 当前版本窗口内可用的操作与按键（全局热键/托盘由 T13 提供）。 */
+/** 窗口内操作 + 全局热键（T13）/托盘操作。CmdOrCtrl：macOS=⌘ Command，Windows/Linux=Ctrl。 */
 const SHORTCUT_ROWS: { operation: string; how: string }[] = [
+  { operation: "唤出主窗口（全局）", how: "按 Cmd/Ctrl + Shift + L；或点击托盘图标。" },
+  { operation: "隐藏到托盘（全局）", how: "按 Cmd/Ctrl + Shift + H；或点击窗口关闭按钮。" },
+  { operation: "开始识别（全局）", how: "按 Cmd/Ctrl + Shift + S；或点击头部「▶ 开始识别」、托盘菜单同项。" },
+  { operation: "停止并生成纪要（全局）", how: "按 Cmd/Ctrl + Shift + T；或点击头部「⏹ 停止并生成纪要」、托盘菜单同项。" },
   { operation: "打开 / 关闭设置", how: "点击头部「⚙ 设置」按钮；按 Esc 关闭。" },
   { operation: "退出置顶大字模式", how: "按 Esc，或点击悬浮的「✕ 退出大字」按钮。" },
   { operation: "显示原文 / 整理版切换", how: "点击字幕工具栏「显示原文 / 显示整理版」按钮。" },
   { operation: "切换整理间隔", how: "点击字幕工具栏的 5s / 10s 按钮，或到「设置 → 常规」调整。" },
-  { operation: "开始识别", how: "点击头部「▶ 开始识别」按钮。" },
-  { operation: "停止并生成纪要", how: "点击头部「⏹ 停止并生成纪要」按钮。" },
+  { operation: "退出应用", how: "托盘菜单「退出」；关闭窗口仅隐藏到托盘，进程常驻。" },
 ];
 
 export default function SettingsDialog({
@@ -338,7 +341,7 @@ export default function SettingsDialog({
             {activeTab === "shortcut" && (
               <section className="settings-tab-section">
                 <p className="settings-panel-hint">
-                  当前版本支持窗口内的按钮与键盘操作；全局热键与托盘常驻由 T13 提供。
+                  支持窗口内按钮 + 全局热键（T13）+ 托盘菜单：窗口关闭后驻留系统托盘，可用热键或托盘随时唤出 / 开始 / 停止识别。
                 </p>
                 <ul className="settings-shortcut-list">
                   {SHORTCUT_ROWS.map((row) => (
