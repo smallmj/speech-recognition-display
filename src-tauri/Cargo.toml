@@ -13,14 +13,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 engine = { path = "../engine" }
 # 麦克风采集（macOS 走 CoreAudio）
 cpal = { version = "0.18" }
 rubato = "0.15"
-# 真实 LLM 客户端（T9）：阻塞式 HTTP + SSE 流式读取。features=["json"] 启用
+# 真实 LLM 客户端（T9）：阻塞式 HTTP + SSE 流式读取。features= ["json"] 启用
 # send_json；默认 features 含 rustls TLS 与 gzip（https 接口必需）。
 # 锁定 ~2.11：2.11 起设置 header 用 Request::set（2.10 及更早用 header），
 # 锁定已验证的 API 形状。
@@ -30,3 +30,7 @@ ureq = { version = "~2.11", features = ["json"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+# 托盘常驻 + 全局热键 + 单实例（T13）：系统托盘图标与菜单、全局快捷键、
+# 重复启动聚焦已有实例（避免麦克风/ASR 被多实例竞争）。
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
