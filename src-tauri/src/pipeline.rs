@@ -497,6 +497,9 @@ fn drain_asr_inputs(
     while let Some(utt) = asr.next_utterance() {
         append_utterance(handle, pipeline, known_speakers, now, utt);
     }
+    // SCD 证据确认的追溯修正：目标片段此刻应已追加（FIFO），解析成
+    // SpeakerCorrected 事件；尚未追加的（跨排空竞态）留待下一拍。
+    flush_corrections(handle, known_speakers);
 }
 
 /// 整理管线是否已全部消化：无在途、无 pending、无未整理/未冻结片段。
@@ -629,6 +632,15 @@ fn append_utterance(
 ) {
     let evt = pipeline.append(now, utt.speaker_id, utt.text.clone());
     if let EngineEvent::SegmentAppended { segment } = &evt {
+        // 记录 utt_seq → segment_id，供 SCD 追溯修正解析。
+        if let Some(seq) = utt.utt_seq {
+            handle
+                .state::<crate::asr::CorrectionState>()
+                .seq_to_segment
+                .lock()
+                .unwrap()
+                .insert(seq, segment.id);
+        }
         if !known_speakers.contains(&segment.speaker_id) {
             known_speakers.push(segment.speaker_id);
             emit(
@@ -644,6 +656,42 @@ fn append_utterance(
         }
         emit(handle, evt);
     }
+}
+
+/// 把 SCD 追溯修正队列解析成 `SpeakerCorrected` 事件。
+///
+/// 目标 `utt_seq` 已映射到片段 id 的修正立即发出；尚未映射（目标片段还没被
+/// 追加）的留在队里等下一拍。修正的目标说话人必然是新确认的说话人，登记进
+/// `known_speakers` 并广播新颜色/头像。
+fn flush_corrections(handle: &AppHandle, known_speakers: &mut Vec<u32>) {
+    let state = handle.state::<crate::asr::CorrectionState>();
+    let mut corrections = state.corrections.lock().unwrap();
+    if corrections.is_empty() {
+        return;
+    }
+    let seq_to_segment = state.seq_to_segment.lock().unwrap();
+    let mut remaining = std::collections::VecDeque::new();
+    while let Some((target_seq, new_speaker_id, gender)) = corrections.pop_front() {
+        let Some(&segment_id) = seq_to_segment.get(&target_seq) else {
+            remaining.push_back((target_seq, new_speaker_id, gender));
+            continue;
+        };
+        let is_new = !known_speakers.contains(&new_speaker_id);
+        if is_new {
+            known_speakers.push(new_speaker_id);
+        }
+        emit(
+            handle,
+            EngineEvent::SpeakerCorrected {
+                segment_id,
+                speaker_id: new_speaker_id,
+                is_new_speaker: is_new,
+                color: engine::speaker_color(new_speaker_id),
+                gender,
+            },
+        );
+    }
+    *corrections = remaining;
 }
 
 /// emit 一条 engine 事件（打印 + 推送给前端）。

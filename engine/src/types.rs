@@ -78,6 +78,13 @@ pub struct Utterance {
     /// 序列化时省略 `None`，保持既有 JSON 契约不变。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_new_speaker: Option<bool>,
+    /// 调用方为这条 final 分配的唯一序号（真实 SCD 路径）。
+    ///
+    /// 用于把 SCD 的追溯修正（[crate::scd::SpeakerCorrection]）解析到最终片段
+    /// id：壳层在把 utterance 追加成片段时记录 `utt_seq → segment_id`。
+    /// 降级路径为 `None`。序列化时省略，保持既有 JSON 契约不变。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utt_seq: Option<u64>,
 }
 
 /// engine 对外暴露的统一事件流。
@@ -102,6 +109,20 @@ pub enum EngineEvent {
         speaker_id: u32,
         is_new_speaker: bool,
         /// 该说话人分配到的颜色（hex，如 `#4f8cff`），同一说话人恒定。
+        color: String,
+        gender: Gender,
+    },
+    /// SCD 证据确认后的**追溯修正**：把此前暂挂在别的说话人名下的片段
+    /// 改归到新说话人（前端据此更新已渲染气泡的归属/颜色/头像）。
+    ///
+    /// 字段与 [`EngineEvent::SpeakerAssigned`] 同构，但目标是**已存在**的
+    /// `segment_id`，语义是「改归」而非「首次登记」。
+    #[serde(rename_all = "camelCase")]
+    SpeakerCorrected {
+        segment_id: u64,
+        speaker_id: u32,
+        is_new_speaker: bool,
+        /// 该说话人分配到的颜色（hex），同一说话人恒定。
         color: String,
         gender: Gender,
     },

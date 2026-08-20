@@ -32,6 +32,7 @@ fn utterance(speaker_id: u32, gender: Gender, text: &str) -> Utterance {
         ts: 0,
         // mock 脚本不提供 SCD 判定，由 Engine 按已见说话人推导 is_new。
         is_new_speaker: None,
+        utt_seq: None,
     }
 }
 
@@ -364,6 +365,7 @@ mod tests {
                 text: "a".into(),
                 ts: 0,
                 is_new_speaker: Some(true),
+        utt_seq: None,
             },
             // 说话人 1 第二次出现，SCD 标记新建（如首个 final 为短发言未注册模板）
             Utterance {
@@ -372,6 +374,7 @@ mod tests {
                 text: "b".into(),
                 ts: 0,
                 is_new_speaker: Some(true),
+        utt_seq: None,
             },
             Utterance {
                 speaker_id: 2,
@@ -379,6 +382,7 @@ mod tests {
                 text: "c".into(),
                 ts: 0,
                 is_new_speaker: Some(false),
+        utt_seq: None,
             },
         ];
         let (_, _, assignments) = run_script(script);

@@ -19,6 +19,7 @@
 | T11 | [#12](https://github.com/smallmj/speech-recognition-display/issues/12) | 会话历史与导出 | T10 | ✅ 已完成（本地提交） |
 | T12 | [#13](https://github.com/smallmj/speech-recognition-display/issues/13) | 设置系统（标签页 + 操作提示 + 持久化） | T3, T7, T9, T11 | ✅ 已完成（本地提交） |
 | T13 | [#14](https://github.com/smallmj/speech-recognition-display/issues/14) | 托盘常驻 + 全局热键 + 会话状态 | T2 | 🟢 frontier · ⚠️ PR #18 返工中 |
+| T15 | — | SCD 幻影说话人修复（短句/噪声每条 final 都新建）| T5 | ✅ 已完成（本地提交，见 T15 总结） |
 
 ## 🟢 Frontier（依赖就绪，可开始）
 

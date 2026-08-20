@@ -38,6 +38,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             app.manage(pipeline::SessionControl::default());
+            app.manage(asr::CorrectionState::default());
             bridge::spawn_ping_emitter(app.handle());
             // 主事件源（T4 + T9 + T10 整合）：真实 ASR（sherpa-onnx + 麦克风）优先，
             // 失败回退合成转写演示模式；final 转写 → 整理管线 → 真实 LLM（SSE）

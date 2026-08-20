@@ -330,6 +330,7 @@ fn handle_deepgram_message(
             text: transcript.trim().to_string(),
             ts: 0,
             is_new_speaker: None,
+            utt_seq: None,
         });
     } else {
         partials

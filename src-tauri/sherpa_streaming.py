@@ -265,14 +265,21 @@ def emit(obj: dict):
     sys.stdout.flush()
 
 
-def final_event(text: str, seg_samples: np.ndarray | None, embedder: SpeakerEmbedder | None) -> dict:
-    """构造一条 final 事件；speaker embedding 模型可用时附带该段音频的 embedding（供 Rust 端 SCD）。"""
+def final_event(text: str, seg_samples: np.ndarray | None, embedder: SpeakerEmbedder | None, sample_rate: int = 16000) -> dict:
+    """构造一条 final 事件。
+
+    - 始终附带 `speech_duration`：该段**有效语音**时长（秒，裁尾部静音后），
+      Rust 端 SCD 据此做时长门槛 / 时长自适应阈值 / 单段新建判定；
+    - speaker embedding 模型可用时附带该段音频的 embedding（供 Rust 端余弦匹配）。
+    """
     obj = {"type": "final", "text": text}
-    if seg_samples is not None and embedder is not None and embedder.available:
+    if seg_samples is not None:
         samples = trim_trailing_silence(seg_samples)
-        emb = embedder.compute(samples)
-        if emb:
-            obj["embedding"] = emb
+        obj["speech_duration"] = round(len(samples) / float(sample_rate), 3)
+        if embedder is not None and embedder.available:
+            emb = embedder.compute(samples)
+            if emb:
+                obj["embedding"] = emb
     return obj
 
 
@@ -331,7 +338,7 @@ def run_streaming(stdin, model_dir: str, sample_rate: int, embedding_model_dir: 
             final = rec.maybe_finalize()
             if final:
                 seg_audio = np.concatenate(seg_samples) if seg_samples else None
-                emit(final_event(final, seg_audio, embedder))
+                emit(final_event(final, seg_audio, embedder, sample_rate))
                 seg_samples = []
                 last_partial = ""
 
@@ -339,7 +346,7 @@ def run_streaming(stdin, model_dir: str, sample_rate: int, embedding_model_dir: 
     final = rec.finish()
     if final:
         seg_audio = np.concatenate(seg_samples) if seg_samples else None
-        emit(final_event(final, seg_audio, embedder))
+        emit(final_event(final, seg_audio, embedder, sample_rate))
     emit({"type": "stopped"})
 
 
