@@ -1,0 +1,139 @@
+# 听障实时字幕展示系统（Speech Caption Display）
+
+> 为听障人士在面对面多人对话中提供**实时字幕**的跨平台桌面应用（macOS / Windows）。
+> 实时把周围人的话转成文字，按说话人显示为彩色气泡 + 随机头像；经 LLM 自动整理成通顺书面语，
+> 会话结束后一键生成结构化会议纪要。**MVP 已验证可行，所有功能以 Tauri 2 + Rust engine + Python sherpa-onnx 落地。**
+
+- 版本：v0.2.0
+- 规格：[Issue #1](https://github.com/smallmj/speech-recognition-display/issues/1)（已关闭）· Ticket 索引见 [docs/tickets.md](docs/tickets.md)
+- 实现总结：`docs/T*-implementation-summary.md` · 架构决策见 `docs/adr/`
+
+---
+
+## 功能特性
+
+### 实时识别（本地优先）
+- **流式识别**：本地 sherpa-onnx 流式 ASR，边说边出字（中文为主 + 中英混合）
+- **本地优先**：默认本地离线识别，音频与文字不出本机
+- **云端可切换**：Deepgram 兼容流式 WebSocket，设置中一键切换并配置 API
+
+### 说话人区分（SCD）
+- 基于 **speaker embedding（ERes2NetV2）** 余弦匹配，实时区分说话人并自动编号
+- 每位说话人**颜色稳定**、配随机头像；可手动重命名（"说话人 2"→"张三"）、换头像/换一批
+- 短句/噪声保护：不产生幻影说话人，长会话颜色不跳变
+
+### 双轨整理（LLM）
+- OpenAI 兼容接口（Base URL + API Key + 模型名），**SSE 流式**输出，失败退避重试 3 次
+- 按可配置间隔（5s / 10s）自动去口语化、纠错、补标点
+- **默认只显示整理版**，一键切换原文；改动词**差异高亮**；整理失败保留原文不丢内容
+
+### 会议纪要
+- 停止识别后把片段自动分批（约 500 字/批 + 滚动上文）交给 LLM，再汇总为
+  **【要点】【行动项】【待办】** 结构化纪要
+
+### 会话历史与导出
+- 会话自动保存到本机，重启后仍在；历史列表可重新打开查看
+- 导出 **Markdown / TXT / SRT**（逐条带时间码）
+
+### 显示与交互
+- 置顶大字模式（始终置顶 + 超大字体，Esc / ✕ 退出）
+- 深浅主题跟随系统并可手动覆盖；自定义字号 / 字体 / 文字颜色
+- 气泡流自动滚动到最新内容
+
+### 桌面集成与设置
+- **托盘常驻** + **全局热键**（⌘/Ctrl+Shift+L/H/S/T）+ 单实例（重复启动唤回主窗口）
+- 首启向导：运行环境检测 + ASR / 说话人模型下载（可选国内镜像），未完成前每次启动回到向导
+- 设置中心：常规 / 模型 / LLM 整理 / 显示 / 快捷键 / 历史 / 关于，标签页分组 + 操作提示 + 持久化 + 即时生效
+
+---
+
+## 架构
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ src/   React 18 前端（薄渲染）                            │
+│   双轨气泡流 · 说话人徽章 · 纪要面板 · 历史 · 设置 · 首启向导 │
+└───────────────▲──────────────────────────────────────────┘
+                │  Tauri IPC（invoke + engine://event 事件流）
+┌───────────────┴──────────────────────────────────────────┐
+│ src-tauri/   Tauri 2 壳（胶水层）                         │
+│   音频采集(cpal) · ASR/云端ASR驱动 · LLM客户端(ureq+SSE)   │
+│   托盘/全局热键/单实例 · 会话持久化 · 导出 · 首启与模型下载  │
+│   ─────────────────────────────────────────────────────  │
+│   sherpa_streaming.py  Python sidecar（stdin/stdout NDJSON│
+│   协议，16kHz PCM 流式转写 + speaker embedding 提取）      │
+└───────────────▲──────────────────────────────────────────┘
+                │  AsrPort / EmbeddingPort / LlmPort（端口注入，不依赖 Tauri）
+┌───────────────┴──────────────────────────────────────────┐
+│ engine/   Rust 核心库（唯一测试缝）                       │
+│   片段管理 · SCD(余弦匹配) · LLM 整理管线(防抖+节奏+editId)│
+│   会议纪要分批汇总 · 统一 EngineEvent 事件契约             │
+└──────────────────────────────────────────────────────────┘
+```
+
+- **engine**（`engine/`）：全部业务逻辑的独立 Rust 库，不依赖 Tauri，通过
+  `AsrPort` / `EmbeddingPort` / `LlmPort` 三个端口注入外部能力，对外暴露统一
+  事件流。**这是整个应用唯一的测试缝**（合成输入 → 断言事件流，无真实音频/网络/WebView）。
+- **Tauri 壳**（`src-tauri/`）：薄胶水层，负责音频采集（cpal）、本地/云端 ASR 驱动、
+  LLM 客户端（ureq 阻塞 + SSE 解析）、托盘/热键/单实例、会话持久化与导出、首启与模型下载。
+- **Python sidecar**（`src-tauri/sherpa_streaming.py`）：sherpa-onnx 流式 ASR，
+  通过 stdin/stdout NDJSON 与 Rust 通信，可独立运行验证 ASR 链路。
+- **React 前端**（`src/`）：刻意薄渲染，只消费事件流。
+
+领域词汇见 [CONTEXT.md](CONTEXT.md)；关键决策见 `docs/adr/`（0001 Tauri 跨平台、
+0002 本地流式 ASR + 自研 SCD、0003 双轨 LLM 整理、0004 可切换云端 ASR）。
+
+---
+
+## 快速开始（开发模式）
+
+前置要求：Node.js ≥ 18（pnpm）、Rust 工具链（Tauri 2 依赖）、Python 3。
+
+```bash
+pnpm install            # 前端依赖
+pnpm run setup:runtime  # 创建 src-tauri/.venv 并安装 sherpa-onnx + numpy（幂等，已存在则跳过）
+pnpm tauri dev          # 启动开发模式
+```
+
+首次启动进入**初始化向导**：检测运行环境 → 下载 ASR 模型（可选 hf-mirror 国内镜像，
+断点续传）→ 下载说话人模型（可跳过，跳过则 SCD 降级为单说话人）→ 进入主界面。
+
+> 缺模型 / 想换识别模型：设置 →「模型」页下载或切换；云端 ASR、LLM 整理分别在
+> 设置对应页配置（OpenAI 兼容：Base URL + API Key + 模型名）。
+
+## 打包
+
+```bash
+pnpm tauri build   # 构建期自动执行 pnpm build + package:runtime（打入 Python 运行时）
+```
+
+产物在 `src-tauri/target/release/bundle/`。打包版运行时已内置，首启只做健康检测与模型下载。
+
+## 测试
+
+```bash
+cargo test --workspace          # engine 单元测试 + 壳层测试（唯一测试缝）
+pnpm build                      # tsc 类型检查 + Vite 构建
+pnpm check:dual-track           # 双轨展示回归
+pnpm check:llm-nonblocking      # LLM 非阻塞整理回归
+pnpm check:focus-exit           # 置顶大字退出回归
+pnpm check:scd-embedding        # SCD embedding 回归
+```
+
+## 目录结构
+
+```
+src/                  React 前端（组件、双轨展示、设置、会话历史、首启向导）
+engine/               Rust 核心库（业务逻辑 + 测试缝）
+src-tauri/            Tauri 2 壳 + Python sidecar（sherpa_streaming.py）
+scripts/              setup-runtime / package-runtime / 回归检查脚本
+docs/                 ADR、Ticket 索引、各票实现总结、调研报告
+```
+
+## 已知边界（MVP）
+
+- 打包/签名（DMG/MSI 与代码签名）延后，开发期用开发模式运行
+- 仅面对面麦克风采集；不采集系统/在线会议音频；无气泡回放
+- SCD 只做切换检测 + 手动命名，不做全自动 diarization / 跨天身份持久化
+- 头像性别不按音色自动选择；无自定义滚动方式；无识别中暂停/继续（详见 Issue #1 Out of Scope）
+- 云端 ASR 为 Deepgram 兼容协议，其他厂商需增加壳层协议适配

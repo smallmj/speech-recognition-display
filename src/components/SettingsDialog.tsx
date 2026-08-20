@@ -98,11 +98,11 @@ export default function SettingsDialog({
     useDisplaySettings();
 
   // 关于页：动态读取应用版本（与 Cargo.toml / tauri.conf.json 保持一致，避免硬编码漂移）。
-  const [appVersion, setAppVersion] = useState("0.1.0");
+  const [appVersion, setAppVersion] = useState("0.2.0");
   useEffect(() => {
     getVersion()
       .then(setAppVersion)
-      .catch(() => setAppVersion("0.1.0"));
+      .catch(() => setAppVersion("0.2.0"));
   }, []);
 
   if (!open) return null;
