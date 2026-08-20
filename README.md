@@ -5,7 +5,8 @@
 > 会话结束后一键生成结构化会议纪要。**MVP 已验证可行，所有功能以 Tauri 2 + Rust engine + Python sherpa-onnx 落地。**
 
 - 版本：v0.2.0
-- 规格：[Issue #1](https://github.com/smallmj/talksee/issues/1)（已关闭）· Ticket 索引见 [docs/tickets.md](docs/tickets.md)
+- 构建：[![CI](https://github.com/smallmj/talksee/actions/workflows/ci.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/ci.yml)
+- 许可：[MIT](LICENSE) · 规格：[Issue #1](https://github.com/smallmj/talksee/issues/1)（已关闭）
 - 实现总结：`docs/T*-implementation-summary.md` · 架构决策见 `docs/adr/`
 
 ---
