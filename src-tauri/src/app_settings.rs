@@ -1,10 +1,9 @@
 //! 常规应用设置（T12 设置系统：整理间隔等，持久化到 app config 目录）。
 //!
 //! 与 ASR/LLM/显示设置不同，这里放「不归任何单一模块」的常规设置在
-//! `app-settings.json`：目前只有整理间隔（5s/10s 两档，规格 #21）。
-//! 驱动线程每秒轮询本配置，档位变化时调用
-//! [engine::CleanupPipeline::set_rhythm_duration]，无需重建整理管线，
-//! 保存后即时生效。
+//! `app-settings.json`：目前有整理间隔（5s/10s 两档，规格 #21）与
+//! 「启用 LLM 整理」开关（T16，关闭后实时整理与会议纪要都不再用 LLM）。
+//! 驱动线程每秒轮询本配置，档位/开关变化时即时生效，无需重建整理管线。
 
 use std::fs;
 use std::path::PathBuf;
@@ -24,12 +23,16 @@ pub const CLEANUP_INTERVALS: [u8; 2] = [5, 10];
 pub struct AppSettings {
     /// LLM 整理固定节奏（秒）：规格限定 5s / 10s 两档。
     pub cleanup_interval_seconds: u8,
+    /// 是否启用 LLM 整理（T16）：关闭后实时字幕整理与会议纪要都不再调用 LLM，
+    /// 字幕一律原文；默认启用（保持历史行为）。
+    pub llm_cleanup_enabled: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             cleanup_interval_seconds: CLEANUP_INTERVALS[0],
+            llm_cleanup_enabled: true,
         }
     }
 }
@@ -100,9 +103,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_to_5_seconds() {
+    fn defaults_to_5_seconds_and_llm_enabled() {
         let cfg = AppSettings::default();
         assert_eq!(cfg.cleanup_interval_seconds, 5);
+        assert!(cfg.llm_cleanup_enabled);
         assert_eq!(cfg.cleanup_interval(), Duration::from_secs(5));
     }
 
@@ -110,9 +114,10 @@ mod tests {
     fn round_trips_via_json_camel_case() {
         let cfg = AppSettings {
             cleanup_interval_seconds: 10,
+            llm_cleanup_enabled: false,
         };
         let json = serde_json::to_string(&cfg).unwrap();
-        assert_eq!(json, r#"{"cleanupIntervalSeconds":10}"#);
+        assert_eq!(json, r#"{"cleanupIntervalSeconds":10,"llmCleanupEnabled":false}"#);
         let parsed: AppSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, cfg);
         assert_eq!(parsed.cleanup_interval(), Duration::from_secs(10));
@@ -122,12 +127,25 @@ mod tests {
     fn legacy_json_missing_fields_uses_defaults() {
         let parsed: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
         assert_eq!(parsed.cleanup_interval_seconds, 5);
+        assert!(parsed.llm_cleanup_enabled);
+    }
+
+    #[test]
+    fn llm_toggle_round_trips() {
+        let cfg = AppSettings {
+            cleanup_interval_seconds: 5,
+            llm_cleanup_enabled: false,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(!parsed.llm_cleanup_enabled);
     }
 
     #[test]
     fn invalid_interval_falls_back_to_default_rhythm() {
         let cfg = AppSettings {
             cleanup_interval_seconds: 7,
+            llm_cleanup_enabled: true,
         };
         assert!(!AppSettings::is_valid_interval(7));
         assert_eq!(cfg.cleanup_interval(), Duration::from_secs(5));

@@ -11,7 +11,7 @@
  * - 关于：版本 / 技术栈 / 规格与实现索引。
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   DISPLAY_LABELS,
   useDisplaySettings,
@@ -22,6 +22,7 @@ import {
 } from "../displaySettings";
 import type { CleanupInterval } from "./DualTrackView";
 import AsrConfigPanel from "./AsrConfigPanel";
+import ModelCatalogPanel from "./ModelCatalogPanel";
 import LlmConfigPanel from "./LlmConfigPanel";
 import SessionHistoryPanel from "./SessionHistoryPanel";
 
@@ -32,17 +33,25 @@ export interface SettingsDialogProps {
   cleanupInterval: CleanupInterval;
   /** 切换整理间隔（App 侧负责保存到 Rust 配置并即时生效）。 */
   onCleanupIntervalChange: (seconds: CleanupInterval) => void;
+  /** 是否启用 LLM 整理（T16，App 侧保存并即时生效）。 */
+  llmCleanupEnabled: boolean;
+  /** 切换 LLM 整理开关。 */
+  onLlmCleanupEnabledChange: (enabled: boolean) => void;
+  /** 打开时若提供，则直接落到该标签页（用于「缺模型 → 引导去下载」）。 */
+  initialTab?: TabId | null;
+  /** 消费掉 initialTab 后回调（App 侧清空，避免下次打开重复跳转）。 */
+  onInitialTabConsumed?: () => void;
   /** 最近一次纪要文本（历史页刷新用）。 */
   latestMinutes: string | null;
   /** 重新运行首次初始化（清除完成标记并回到向导）。 */
   onReinitialize: () => void;
 }
 
-type TabId = "general" | "asr" | "llm" | "display" | "shortcut" | "history" | "about";
+export type TabId = "general" | "model" | "llm" | "display" | "shortcut" | "history" | "about";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "general", label: "常规" },
-  { id: "asr", label: "ASR" },
+  { id: "model", label: "模型" },
   { id: "llm", label: "LLM 整理" },
   { id: "display", label: "显示" },
   { id: "shortcut", label: "快捷键" },
@@ -65,10 +74,22 @@ export default function SettingsDialog({
   onClose,
   cleanupInterval,
   onCleanupIntervalChange,
+  llmCleanupEnabled,
+  onLlmCleanupEnabledChange,
   latestMinutes,
   onReinitialize,
+  initialTab,
+  onInitialTabConsumed,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<TabId>("general");
+
+  // 打开设置时若指定了目标标签页（如「缺模型 → 模型页下载」），跳转过去。
+  useEffect(() => {
+    if (open && initialTab) {
+      setActiveTab(initialTab);
+      onInitialTabConsumed?.();
+    }
+  }, [open, initialTab, onInitialTabConsumed]);
   const { settings, setTheme, setFocusMode, setFontSize, setFontFamily, setTextColor } =
     useDisplaySettings();
 
@@ -182,18 +203,38 @@ export default function SettingsDialog({
               </section>
             )}
 
-            {activeTab === "asr" && (
+            {activeTab === "model" && (
               <section className="settings-tab-section">
                 <p className="settings-panel-hint">
-                  选择识别来源：本地 sherpa-onnx 离线识别，或 Deepgram 兼容云端流式识别。
-                  云端配置保存在本机，保存后自动热切换，无需重启。
+                  选择识别来源（本地 sherpa-onnx / Deepgram 兼容云端流式）与要使用的本地模型；
+                  本地模型改动下次「开始识别」生效，云端 ASR 保存后自动热切换。
                 </p>
                 <AsrConfigPanel embedded />
+                <hr className="settings-panel-divider" />
+                <ModelCatalogPanel />
               </section>
             )}
 
             {activeTab === "llm" && (
               <section className="settings-tab-section">
+                <div className="settings-toggle-row">
+                  <span className="settings-toggle-label">启用 LLM 整理</span>
+                  <button
+                    type="button"
+                    className={`settings-toggle ${llmCleanupEnabled ? "on" : ""}`}
+                    onClick={() => onLlmCleanupEnabledChange(!llmCleanupEnabled)}
+                    aria-label="切换启用 LLM 整理"
+                  >
+                    <span className="settings-toggle-knob" />
+                  </button>
+                </div>
+                <p className="settings-panel-hint">
+                  关闭后实时字幕整理与会议纪要都不再调用 LLM，字幕一律原文（双轨「整理版」等同原文）；
+                  保存后即时生效，重新开启即恢复。
+                </p>
+
+                <hr className="settings-panel-divider" />
+
                 <p className="settings-panel-hint">
                   配置 OpenAI 兼容服务（Base URL + API Key + 模型名），可对接 DeepSeek、豆包、
                   OpenAI、本地 Ollama 等。每次整理请求前自动读取最新配置，保存后即时生效。

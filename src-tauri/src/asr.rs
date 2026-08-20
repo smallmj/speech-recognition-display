@@ -171,77 +171,26 @@ impl SherpaAsr {
         })
     }
 
-    /// 解析模型目录：环境变量覆盖 → 模型根目录下第一个含 tokens.txt 的目录。
+    /// 解析模型目录：环境变量覆盖 → 按 `model-config.json` 所选模型解析（T16）。
     fn resolve_model_dir(handle: &AppHandle) -> Result<PathBuf, String> {
         if let Ok(dir) = std::env::var(MODEL_DIR_ENV) {
             let p = PathBuf::from(dir);
             return if p.is_dir() { Ok(p) } else { Err(format!("{MODEL_DIR_ENV} 指向的目录不存在: {p:?}")) };
         }
-        let root = crate::model_paths::model_root(handle)?;
-        let mut candidates: Vec<PathBuf> = std::fs::read_dir(&root)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .filter(|p| p.is_dir() && p.join("tokens.txt").is_file())
-                    .collect()
-            })
-            .unwrap_or_default();
-        candidates.sort();
-        candidates
-            .into_iter()
-            .next()
-            .ok_or_else(|| format!("未找到 ASR 模型：{root:?} 下没有含 tokens.txt 的模型目录（或用 {MODEL_DIR_ENV} 指定）"))
+        crate::models::selected_asr_dir(handle)
     }
 
     /// 解析说话人 speaker embedding 模型目录（T5 SCD，可选）。
     ///
-    /// 探测口径：环境变量 [`EMBEDDING_MODEL_DIR_ENV`] 优先；否则在 `asr-models/`
-    /// 下找文件名含 `3dspeaker`/`speaker`/`embedding` 且后缀 `.onnx` 的模型目录
-    /// （sherpa-onnx 生态的 3d-speaker eres2net / wav2vec2 speaker 系列）。
-    /// 找不到返回 `None` —— 不传 `--embedding-model-dir`，sidecar 不加载
+    /// 环境变量覆盖优先；否则按 `model-config.json` 所选 embedding 模型解析（T16）。
+    /// 未配置/未下载返回 `None` —— 不传 `--embedding-model-dir`，sidecar 不加载
     /// speaker embedding 模型，SCD 降级为单说话人。
     fn resolve_embedding_model_dir(handle: &AppHandle) -> Option<PathBuf> {
         if let Ok(dir) = std::env::var(EMBEDDING_MODEL_DIR_ENV) {
             let p = PathBuf::from(dir);
             return if p.is_dir() { Some(p) } else { None };
         }
-        let root = crate::model_paths::model_root(handle).ok()?;
-        let mut candidates: Vec<(PathBuf, i32)> = std::fs::read_dir(&root)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .filter(|p| {
-                        // map_or 降写法（MSRV：is_ok_and 需 ≥1.70，仓库未声明 rust-version）。
-                        p.is_dir() && p.read_dir().map_or(false, |mut it| {
-                            it.any(|f| f.as_ref().map_or(false, |f| {
-                                let name = f.file_name().to_string_lossy().to_lowercase();
-                                name.ends_with(".onnx")
-                                    && (name.contains("3dspeaker") || name.contains("speaker") || name.contains("embedding"))
-                            }))
-                        })
-                    })
-                    .filter_map(|p| {
-                        // 短语音优化模型优先（2026-08 实测 eres2netv2 短段区分度优于
-                        // eres2net-base，见 engine::Scd 模块注释）：优先级
-                        // eres2netv2 > campplus > 其余 speaker 模型。
-                        let name = p
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_lowercase())
-                            .unwrap_or_default();
-                        let score = if name.contains("eres2netv2") {
-                            3
-                        } else if name.contains("campplus") {
-                            2
-                        } else {
-                            1
-                        };
-                        Some((p, score))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        candidates.into_iter().next().map(|(p, _)| p)
+        crate::models::selected_embedding_dir(handle)
     }
 
     /// 是否向 sidecar 配置了 speaker embedding 模型（spawn 时决定；用于壳层日志）。

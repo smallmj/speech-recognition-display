@@ -237,3 +237,41 @@
   background: transparent;
   color: var(--app-fg);
 }
+
+/* T16：模型选择 + 自动回退 */
+.first-run-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.first-run-pick select {
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.4));
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font-size: 14px;
+}
+
+.first-run-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, #888);
+}
+
+.first-run-hint-warn {
+  margin: 0;
+  font-size: 12px;
+  color: #d29922;
+}
+
+.first-run-auto-fallback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted, #888);
+}
