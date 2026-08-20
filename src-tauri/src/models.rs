@@ -174,6 +174,13 @@ fn entry(
 }
 
 /// 内置模型目录。数据源：2026-08 实测（见 issue #27）。
+///
+/// 说明：规格（issue #27）原列 3 个 ASR；`sherpa-onnx-x-asr-960ms-...-2026-06-05`
+/// 的 sherpa-onnx int8 导出文件经核实**没有公开可下载来源**（HuggingFace 各 org、
+/// GitHub 均无此精确产物；本地 README 指向的 `Gilgamesh-J/X-ASR` GitHub 仓库只有
+/// 不同格式的 `encoder-960ms.onnx` 等原生 ONNX，缺 `bpe.model`，sidecar 无法可靠
+/// 加载），故从可下载目录中移除，避免「能下载但识别不可用」。本地已有该目录的开发
+/// /CI 场景仍可用 `SHERPA_MODEL_DIR` 环境变量覆盖（见 `asr.rs`）。
 pub fn all_models() -> &'static [ModelEntry] {
     static MODELS: OnceLock<Vec<ModelEntry>> = OnceLock::new();
     MODELS.get_or_init(|| vec![
@@ -200,30 +207,6 @@ pub fn all_models() -> &'static [ModelEntry] {
                 "Apache-2.0（以官方模型卡为准）",
                 "macOS / Windows（纯 CPU，无需 GPU）",
                 "2026-06 新版，识别质量与标点完善，默认推荐",
-            ),
-        ),
-        entry(
-            "sherpa-onnx-x-asr-960ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
-            ModelKind::Asr,
-            "zipformer 960ms 低延迟（2026-06-05）",
-            "csukuangfj2/sherpa-onnx-x-asr-960ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
-            "sherpa-onnx-x-asr-960ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
-            &[
-                "encoder.int8.onnx",
-                "decoder.onnx",
-                "joiner.int8.onnx",
-                "bpe.model",
-                "tokens.txt",
-            ],
-            169_345_153,
-            false,
-            desc(
-                "中英混合，含标点",
-                "更低延迟（约 960ms 分块），更实时",
-                "双核 CPU + 4GB 内存即可；2 线程推理",
-                "Apache-2.0（以官方模型卡为准）",
-                "macOS / Windows（纯 CPU，无需 GPU）",
-                "低延迟优先；⚠️ 该模型仓库 URL 尚未核实（本机已有副本），全新环境下载前请先在 HuggingFace 确认仓库地址",
             ),
         ),
         entry(
@@ -948,10 +931,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_has_three_asr_and_three_embedding() {
+    fn manifest_has_two_asr_and_three_embedding() {
+        // ASR 目录原列 3 个，960ms 因无可下载公开来源被移除（见 all_models 注释）。
         let asr: Vec<_> = models_by_kind(ModelKind::Asr).collect();
         let emb: Vec<_> = models_by_kind(ModelKind::Embedding).collect();
-        assert_eq!(asr.len(), 3);
+        assert_eq!(asr.len(), 2);
         assert_eq!(emb.len(), 3);
     }
 
