@@ -94,6 +94,21 @@ pub fn run() {
             sessions::load_session,
             sessions::export_session_file
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            // macOS：点 Dock 图标触发 `applicationShouldHandleReopen`（RunEvent::Reopen）。
+            // 主窗口被隐藏（关闭→托盘）时 macOS 不会自动恢复隐藏窗口，只会激活应用，
+            // 必须在这里主动唤回——否则会表现为「点 Dock 图标窗口打不开」。
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                if !has_visible_windows {
+                    tray::show_main_window(app_handle);
+                }
+            }
+            _ => {}
+        });
 }
