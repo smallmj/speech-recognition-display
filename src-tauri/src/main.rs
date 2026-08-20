@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    speech_caption_display_lib::run()
+    talksee_lib::run()
 }

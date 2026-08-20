@@ -1,6 +1,6 @@
 # T10 实现总结：会议纪要（停止后分批汇总）
 
-> Issue: [#11](https://github.com/smallmj/speech-recognition-display/issues/11)
+> Issue: [#11](https://github.com/smallmj/talksee/issues/11)
 > 依赖：T9 真实 LLM（OpenAI 兼容 + SSE + 重试）已在 main；本实现基于 main（含 PR #20 非阻塞 LLM 整理）。
 
 ## 实现内容
@@ -29,7 +29,7 @@
   - 「开始识别」重建整理管线（片段 id 从 0 复用）并 emit `SessionStarted`。
 - **导出 .md**（`src-tauri/src/export.rs` + 前端，T11 出口复用）：
   - `export_session` Tauri 命令把**字幕记录 + 会议纪要**写入系统文档目录下的
-    `语音识别展示系统-导出/会话记录-<时间戳>.md`（带 `# 字幕记录与会议纪要`
+    `TalkSee-导出/会话记录-<时间戳>.md`（带 `# 字幕记录与会议纪要`
     标题）；字幕逐条为「时间 + 说话人 + 整理版文本」，无整理版时回退原文；
     写文件逻辑在可测的 `export_session_to_dir`（TDD 测试缝）。
   - `MinutesPanel` 新增「💾 导出 .md」按钮与导出状态/路径提示。

@@ -39,7 +39,7 @@ const HOTKEY_START: &str = "CmdOrCtrl+Shift+S";
 const HOTKEY_STOP: &str = "CmdOrCtrl+Shift+T";
 
 /// 托盘 tooltip 前缀（后接会话状态）。
-const TRAY_TOOLTIP_PREFIX: &str = "实时字幕展示";
+const TRAY_TOOLTIP_PREFIX: &str = "语见 · TalkSee";
 
 /// 托盘运行时状态：托盘句柄 + 需要动态更新的菜单项 + 事件监听句柄。
 ///
@@ -326,7 +326,7 @@ pub(crate) fn hide_main_window(app: &AppHandle) {
 fn rebuild_main_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("实时字幕展示")
+        .title("语见 · TalkSee")
         .inner_size(960.0, 720.0)
         .min_inner_size(480.0, 320.0)
         .resizable(true)

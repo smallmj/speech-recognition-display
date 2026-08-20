@@ -378,7 +378,7 @@ export default function SettingsDialog({
                 <div className="settings-panel-section">
                   <p className="settings-panel-section-title">版本</p>
                   <p className="settings-about-line">
-                    语音识别展示系统 v{appVersion}（听障实时字幕展示 MVP）。
+                    语见 TalkSee v{appVersion}（听障实时字幕展示 MVP）。
                   </p>
                 </div>
 
@@ -387,7 +387,7 @@ export default function SettingsDialog({
                 <div className="settings-panel-section">
                   <p className="settings-panel-section-title">项目仓库</p>
                   <p className="settings-about-line">
-                    github.com/smallmj/speech-recognition-display
+                    github.com/smallmj/talksee
                   </p>
                 </div>
 

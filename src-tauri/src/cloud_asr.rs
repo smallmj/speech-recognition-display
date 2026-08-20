@@ -231,7 +231,7 @@ fn build_request(config: &AsrConfig) -> Result<Request, String> {
             "Authorization",
             format!("Token {}", config.cloud_api_key.trim()),
         )
-        .header("User-Agent", "speech-caption-display/0.1")
+        .header("User-Agent", "talksee/0.2")
         .body(())
         .map_err(|e| format!("构造云端 ASR 请求失败: {e}"))
 }

@@ -322,7 +322,7 @@ export default function App() {
     <DisplayContext.Provider value={display}>
       <div className="app">
         <header className="app-header">
-          <h1>实时字幕展示</h1>
+          <h1>语见 · 实时字幕</h1>
           <span className={`badge ${bridgeReady ? "badge-on" : "badge-off"}`}>
             {bridgeReady ? "事件桥已接通" : "等待事件桥…"}
           </span>
@@ -417,7 +417,7 @@ export default function App() {
         </main>
 
         <footer className="app-footer">
-          听障实时字幕展示系统 · Tauri 2 + React + engine（T4 真实本地 ASR → T9 LLM 流式整理 → T10 会话控制/会议纪要）
+          语见 TalkSee · 听障实时字幕展示系统 · Tauri 2 + React + Rust engine
         </footer>
 
         {/* 置顶大字模式浮动退出按钮：头部隐藏后仍可一键退出（也可按 Esc） */}

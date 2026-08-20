@@ -1,6 +1,6 @@
 # T12 实现总结：设置系统（标签页 + 操作提示 + 持久化）
 
-> Issue: [\#13](https://github.com/smallmj/speech-recognition-display/issues/13)
+> Issue: [\#13](https://github.com/smallmj/talksee/issues/13)
 > 依赖：T3（显示）、T7（ASR）、T9（LLM）、T11（历史）均已完成。
 
 ## 实现内容

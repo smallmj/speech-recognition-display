@@ -3620,25 +3620,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "speech-caption-display"
-version = "0.2.0"
-dependencies = [
- "cpal",
- "engine",
- "futures-util",
- "rubato",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-single-instance",
- "tokio",
- "tokio-tungstenite",
- "ureq",
-]
-
-[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3760,6 +3741,25 @@ dependencies = [
  "pkg-config",
  "toml 0.8.2",
  "version-compare",
+]
+
+[[package]]
+name = "talksee"
+version = "0.2.0"
+dependencies = [
+ "cpal",
+ "engine",
+ "futures-util",
+ "rubato",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-single-instance",
+ "tokio",
+ "tokio-tungstenite",
+ "ureq",
 ]
 
 [[package]]

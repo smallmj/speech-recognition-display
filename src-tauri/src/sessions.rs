@@ -2,7 +2,7 @@
 //! 导出 Markdown / TXT / SRT，重启后历史仍在。
 //!
 //! 会话记录以 JSON 存在 app data 目录的 `sessions/`；导出文件写入系统文档
-//! 目录的 `语音识别展示系统-导出/`。纯格式化函数（markdown/txt/srt）与
+//! 目录的 `TalkSee-导出/`。纯格式化函数（markdown/txt/srt）与
 //! 保存/列表逻辑都可测（TDD 测试缝）。
 
 use std::fs;
@@ -226,7 +226,7 @@ pub fn export_session_file(app: AppHandle, id: String, format: String) -> Result
         .path()
         .document_dir()
         .map_err(|e| format!("无法定位系统文档目录: {e}"))?
-        .join("语音识别展示系统-导出");
+        .join("TalkSee-导出");
     fs::create_dir_all(&dir).map_err(|e| format!("创建导出目录失败: {e}"))?;
     let path = dir.join(format!("会话记录-{}.{ext}", record.id));
     fs::write(&path, content).map_err(|e| format!("写入导出文件失败: {e}"))?;
