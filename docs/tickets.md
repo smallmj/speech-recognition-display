@@ -18,12 +18,9 @@
 | T10 | [#11](https://github.com/smallmj/speech-recognition-display/issues/11) | 会议纪要（停止后分批汇总） | T9 | ✅ 已完成（本地提交） |
 | T11 | [#12](https://github.com/smallmj/speech-recognition-display/issues/12) | 会话历史与导出 | T10 | ✅ 已完成（本地提交） |
 | T12 | [#13](https://github.com/smallmj/speech-recognition-display/issues/13) | 设置系统（标签页 + 操作提示 + 持久化） | T3, T7, T9, T11 | ✅ 已完成（本地提交） |
-| T13 | [#14](https://github.com/smallmj/speech-recognition-display/issues/14) | 托盘常驻 + 全局热键 + 会话状态 | T2 | 🟢 frontier · ⚠️ PR #18 返工中 |
+| T13 | [#14](https://github.com/smallmj/speech-recognition-display/issues/14) | 托盘常驻 + 全局热键 + 会话状态 | T2 | ✅ 已实现（PR #29，待合并） |
 | T15 | — | SCD 幻影说话人修复（短句/噪声每条 final 都新建）| T5 | ✅ 已完成（本地提交，见 T15 总结） |
 
-## 🟢 Frontier（依赖就绪，可开始）
-
-- **T13**（托盘+热键）— PR #18 返工中（rebase + 修 9 编译错 + manage/命令 + 停止真停 ASR）
 
 ## 🔴 Blocked（等前置票）
 
@@ -36,6 +33,6 @@ T1 ✅
           ├─ T4 ✅ ─┬─ T5 ✅ ─ T6 ✅ │
           │         └─ T7 ✅       │
           ├─ T8 ✅ ─ T9 ✅ ─ T10 ✅ ─ T11 ✅ ─┐
-          └─ T13 🟢                  │
+          └─ T13 ✅                  │
           T12 ✅ ◀──────────────────┘ (T3,T7,T9,T11)
 ```
