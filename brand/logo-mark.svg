@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TalkSee / 语见 — Logo Mark (图标矢量版)
+  仅含图标,不带文字,用于 favicon、嵌入 SVG、第三方 logo 引用
+  viewBox 0 0 1024 1024,直接复用 icon-source 设计
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="1024" height="1024" rx="225" ry="225"/>
+    </clipPath>
+    <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"  stop-color="#3B82F6"/>
+      <stop offset="50%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <radialGradient id="bgGrad" cx="50%" cy="42%" r="90%">
+      <stop offset="0%"  stop-color="#1E1B4B"/>
+      <stop offset="55%" stop-color="#0F0F23"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </radialGradient>
+    <radialGradient id="centerGlow" cx="50%" cy="50%" r="55%">
+      <stop offset="0%"  stop-color="#6366F1" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#6366F1" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="url(#bgGrad)"/>
+    <ellipse cx="512" cy="512" rx="460" ry="400" fill="url(#centerGlow)"/>
+
+    <!-- 声波(无文字) -->
+    <g stroke="url(#waveGrad)" stroke-width="42" stroke-linecap="round" fill="none">
+      <path d="M 110 460 Q 175 360 240 460 T 370 460 T 500 460 T 630 460 T 760 460 L 944 460"/>
+    </g>
+
+    <!-- 字幕条(无文字) -->
+    <rect x="120" y="600" width="784" height="180" rx="36"
+          fill="#1E1B4B" opacity="0.55"/>
+    <rect x="120" y="600" width="784" height="180" rx="36"
+          fill="none" stroke="#8B5CF6" stroke-width="3" opacity="0.55"/>
+
+    <!-- 节拍线 -->
+    <g transform="translate(170 660)">
+      <rect x="0"  y="20" width="6" height="40" rx="3" fill="url(#waveGrad)"/>
+      <rect x="16" y="6"  width="6" height="68" rx="3" fill="url(#waveGrad)"/>
+      <rect x="32" y="16" width="6" height="48" rx="3" fill="url(#waveGrad)"/>
+      <rect x="48" y="0"  width="6" height="80" rx="3" fill="url(#waveGrad)"/>
+      <rect x="64" y="20" width="6" height="40" rx="3" fill="url(#waveGrad)"/>
+    </g>
+
+    <rect width="1024" height="2" fill="#FFFFFF" opacity="0.18"/>
+  </g>
+</svg>

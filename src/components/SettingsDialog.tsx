@@ -26,6 +26,7 @@ import ModelCatalogPanel from "./ModelCatalogPanel";
 import LlmConfigPanel from "./LlmConfigPanel";
 import SessionHistoryPanel from "./SessionHistoryPanel";
 import { getVersion } from "@tauri-apps/api/app";
+import logoMark from "../../brand/logo-mark-256.png";
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -375,6 +376,15 @@ export default function SettingsDialog({
 
             {activeTab === "about" && (
               <section className="settings-tab-section">
+                <div className="settings-panel-section settings-about-hero">
+                  <img src={logoMark} alt="" className="settings-about-logo" />
+                  <p className="settings-about-line settings-about-name">
+                    语见 TalkSee · 让对话，看得见
+                  </p>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
                 <div className="settings-panel-section">
                   <p className="settings-panel-section-title">版本</p>
                   <p className="settings-about-line">

@@ -212,6 +212,14 @@ body {
   font-weight: 600;
 }
 
+.app-header .app-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  flex: none;
+  user-select: none;
+}
+
 .app-header-right {
   margin-left: auto;
   display: flex;
@@ -858,6 +866,24 @@ body {
   margin: 0;
   line-height: 1.6;
   opacity: 0.85;
+}
+
+.settings-about-hero {
+  text-align: center;
+}
+
+.settings-about-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  margin: 0 auto 10px;
+  display: block;
+  user-select: none;
+}
+
+.settings-about-name {
+  font-weight: 600;
+  opacity: 1;
 }
 
 .app-loading {

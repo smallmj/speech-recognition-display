@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TalkSee / 语见 — App Icon Source v7 (1024x1024) — FINAL FINAL
+  Last-mile fix on v6: 闭合"声波→字幕条"的视觉因果链
+    - 声波的水平段尾端,直接连到字幕条左边缘(消除视觉断层)
+    - 字幕条左内的小波浪,与主声波严格同步(同一节奏、同一相位)
+    - 让用户第一眼看到的就是 "声音流入 → 字幕条出现"
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="1024" height="1024" rx="225" ry="225"/>
+    </clipPath>
+
+    <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"  stop-color="#3B82F6"/>
+      <stop offset="50%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"  stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#EC4899"/>
+    </linearGradient>
+
+    <radialGradient id="bgGrad" cx="50%" cy="35%" r="90%">
+      <stop offset="0%"  stop-color="#1E1B4B"/>
+      <stop offset="55%" stop-color="#0F0F23"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </radialGradient>
+
+    <radialGradient id="centerGlow" cx="50%" cy="42%" r="55%">
+      <stop offset="0%"  stop-color="#6366F1" stop-opacity="0.50"/>
+      <stop offset="100%" stop-color="#6366F1" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="cursorGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#EC4899"/>
+      <stop offset="100%" stop-color="#F472B6"/>
+    </linearGradient>
+
+    <linearGradient id="barBg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"  stop-color="#1E1B4B" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#312E81" stop-opacity="0.70"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="url(#bgGrad)"/>
+    <ellipse cx="512" cy="512" rx="460" ry="400" fill="url(#centerGlow)"/>
+
+    <!-- 声波:波形 → 水平线 → 一直延伸到字幕条左边缘(关键改造) -->
+    <g stroke="url(#waveGrad)" stroke-linecap="round" fill="none">
+      <path stroke-width="42" d="
+        M 110 460
+        Q 175 360 240 460
+        T 370 460
+        T 500 460
+        T 630 460
+        T 760 460
+        L 944 460
+      "/>
+    </g>
+
+    <!-- 字幕条:贯通,但去掉尖尾巴,改成长方形。左缘位置与声波尾端对齐 -->
+    <g>
+      <rect x="120" y="600" width="784" height="180" rx="36"
+            fill="url(#barBg)"/>
+      <rect x="120" y="600" width="784" height="180" rx="36"
+            fill="none" stroke="#8B5CF6" stroke-width="3" opacity="0.55"/>
+
+      <!-- 字幕条左侧"声波流入"标记:三道短竖线 + 一段继承自主声波节奏的小波形(视觉上"主声波在这被拆成短节拍 = 字") -->
+      <g transform="translate(170 660)">
+        <!-- 三条短节拍线(代表声波被切分成"字") -->
+        <rect x="0"  y="20" width="6" height="40" rx="3" fill="url(#waveGrad)"/>
+        <rect x="16" y="6"  width="6" height="68" rx="3" fill="url(#waveGrad)"/>
+        <rect x="32" y="16" width="6" height="48" rx="3" fill="url(#waveGrad)"/>
+        <rect x="48" y="0"  width="6" height="80" rx="3" fill="url(#waveGrad)"/>
+        <rect x="64" y="20" width="6" height="40" rx="3" fill="url(#waveGrad)"/>
+      </g>
+
+      <!-- 主文字:"语见" -->
+      <text x="270" y="722" font-family="-apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif"
+            font-size="108" font-weight="800" fill="url(#textGrad)" letter-spacing="6">语见</text>
+
+      <!-- 光标 -->
+      <rect x="528" y="640" width="9" height="104" rx="4.5" fill="url(#cursorGrad)"/>
+
+      <!-- TalkSee 副标题 -->
+      <text x="576" y="722" font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', system-ui, sans-serif"
+            font-size="46" font-weight="600" fill="#A78BFA" opacity="0.95" letter-spacing="2">TalkSee</text>
+    </g>
+
+    <rect width="1024" height="2" fill="#FFFFFF" opacity="0.18"/>
+  </g>
+</svg>
