@@ -34,7 +34,7 @@ const modelDir = path.join(
   root,
   "src-tauri/asr-models/sherpa-onnx-x-asr-960ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05",
 );
-const embeddingDir = path.join(root, "src-tauri/asr-models/sherpa-onnx-3dspeaker-eres2net-base");
+const embeddingDir = path.join(root, "src-tauri/asr-models/sherpa-onnx-3dspeaker-eres2netv2-base");
 const defaultWavs = [0, 1, 2, 3].map(
   (i) => path.join(modelDir, "test_wavs", `${i}.wav`),
 );
@@ -140,12 +140,12 @@ for (const wav of wavs) {
   if (!started?.scd_embedding) startedOk = false;
   if (!finals.length) throw new Error(`wav 无 final 输出: ${wav}`);
   for (const f of finals) {
-    if (!Array.isArray(f.embedding) || f.embedding.length !== 512) embeddingOk = false;
+    if (!Array.isArray(f.embedding) || f.embedding.length !== 192) embeddingOk = false;
   }
   byWav.push({ wav, finals });
 }
 check("sidecar 确认加载 speaker embedding 模型", startedOk);
-check("每条 final 携带 512 维 embedding", embeddingOk);
+check("每条 final 携带 192 维 embedding（eres2netv2）", embeddingOk);
 
 const scdInput = Buffer.concat(
   byWav.flatMap(({ finals }) => finals.map((f) => Buffer.from(`${JSON.stringify(f)}\n`, "utf8"))),
@@ -168,15 +168,58 @@ const perWavSpeakers = byWav.map(({ finals }) => {
   return ids;
 });
 const stableWithinWav = perWavSpeakers.every((ids) => new Set(ids).size === 1);
-const distinctAcrossWavs = new Set(perWavSpeakers.map((ids) => ids[0])).size >= 2;
+// 真实底数（2026-08 实测两模型一致）：test_wavs 只有两位说话人 —— 0.wav 是
+// 说话人 A，1/2/3.wav 是同一说话人 B（0 vs 1/2/3 全段余弦 ≈0；1/2/3 互相
+// ≈0.66–0.88）。旧断言「4 个 wav = 4 个说话人」的前提是错的（0.75 阈值把
+// B 也切碎了，恰是 PR #25 修的幻影说话人 bug）。新断言：A、B 各归一个
+// 说话人，且 A ≠ B。
+const wav0Spk = perWavSpeakers[0][0];
+const othersSpk = new Set(perWavSpeakers.slice(1).map((ids) => ids[0]));
+const twoSpeakers = othersSpk.size === 1 && !othersSpk.has(wav0Spk);
 check("同一 wav 内 final 归属同一说话人", stableWithinWav);
-check("不同 wav（不同说话人）分到不同说话人", distinctAcrossWavs);
+check("两位真实说话人分开（0.wav=A，1/2/3.wav=B，且 A≠B）", twoSpeakers);
 
 for (let i = 0; i < byWav.length; i += 1) {
   console.log(
     `  [scd] ${path.basename(byWav[i].wav)} -> speaker ${perWavSpeakers[i].join(",")}`,
   );
 }
+
+// 短句 + 房间噪声场景（PR #25 校准）：两人快速交替 1.5–2.5s 短句，真实
+// eres2netv2 embedding + 固定噪声种子。修复前（固定 0.75 阈值）每条 final
+// 都新建说话人 → 14 个说话人；修复后应稳定分成 2 个说话人且交替正确。
+const fixtureGen = path.join(root, "scripts/gen_scd_short_alt_fixture.py");
+const fixtureRes = spawnSync(python, [fixtureGen], { maxBuffer: 64 * 1024 * 1024 });
+if (fixtureRes.status !== 0) {
+  throw new Error(`fixture 生成失败: ${fixtureRes.stderr?.toString() || ""}`);
+}
+const shortAltInput = fixtureRes.stdout;
+const shortAltRows = spawnSync(example, [], { input: shortAltInput, maxBuffer: 64 * 1024 * 1024 });
+if (shortAltRows.status !== 0) {
+  throw new Error(`scd_emit(短句场景) 失败: ${shortAltRows.stderr?.toString() || ""}`);
+}
+const shortAlt = shortAltRows.stdout
+  .toString("utf8")
+  .split(/\r?\n/)
+  .filter((l) => l.trim())
+  .map((l) => JSON.parse(l));
+const shortAltIds = new Set();
+for (const r of shortAlt) {
+  shortAltIds.add(r.speaker_id);
+  for (const c of r.corrections) shortAltIds.add(c.new_speaker_id);
+}
+const alternationOk = shortAlt.every(
+  (r, i) => r.speaker_id === (i % 2 === 0 ? 1 : 2),
+);
+check(
+  "短句交替场景分成 2 个说话人",
+  shortAltIds.size === 2 && shortAltIds.has(1) && shortAltIds.has(2),
+  `实际 ${[...shortAltIds].sort().join(",")} 个`,
+);
+check("短句交替场景归属正确（A/B 交替）", alternationOk);
+console.log(
+  `  [scd] 短句交替 14 条 -> speaker ${shortAlt.map((r) => r.speaker_id).join(",")}`,
+);
 for (const c of checks) {
   console.log(`[scd-embedding] ${c.name}: ${c.pass ? "PASS" : "FAIL"}${c.pass ? "" : ` (${c.detail ?? ""})`}`);
 }

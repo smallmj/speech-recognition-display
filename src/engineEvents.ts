@@ -45,6 +45,15 @@ export type EngineEvent =
       color: string;
       gender: Gender;
     }
+  | {
+      /** SCD 证据确认后的追溯修正：把已渲染片段改归到新说话人。 */
+      type: "speakerCorrected";
+      segmentId: number;
+      speakerId: number;
+      isNewSpeaker: boolean;
+      color: string;
+      gender: Gender;
+    }
   | { type: "partialResult"; text: string }
   | {
       type: "segmentCleaning";

@@ -60,6 +60,15 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
       next.set(evt.segment.id, evt.segment);
       return next;
     }
+    case "speakerCorrected": {
+      // SCD 证据确认后的追溯修正：把该片段的归属改到新说话人，
+      // 渲染分组（按 speakerId）随之重建，气泡颜色/头像一并更新。
+      const seg = prev.get(evt.segmentId);
+      if (!seg) return prev;
+      const next = new Map(prev);
+      next.set(seg.id, { ...seg, speakerId: evt.speakerId });
+      return next;
+    }
     case "segmentCleaning": {
       const seg = prev.get(evt.segmentId);
       if (!seg) return prev;
@@ -131,7 +140,7 @@ export function reconcileSegments(prev: Map<number, Segment>, evt: EngineEvent):
 
 /** 从事件流规约说话人颜色映射（SpeakerAssigned 先于 SegmentAppended 到达）。 */
 export function reconcileSpeakerColors(prev: Map<number, string>, evt: EngineEvent): Map<number, string> {
-  if (evt.type === "speakerAssigned") {
+  if (evt.type === "speakerAssigned" || evt.type === "speakerCorrected") {
     const next = new Map(prev);
     if (!next.has(evt.speakerId)) {
       next.set(evt.speakerId, evt.color);

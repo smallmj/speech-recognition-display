@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use engine::Scd;
 use engine::{AsrPort, Gender, Utterance};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 /// sidecar 状态：0=启动中 1=已启动 2=出错 3=已停止
 const ST_STARTING: u8 = 0;
@@ -204,7 +204,7 @@ impl SherpaAsr {
             return if p.is_dir() { Some(p) } else { None };
         }
         let root = crate::model_paths::model_root(handle).ok()?;
-        let mut candidates: Vec<PathBuf> = std::fs::read_dir(&root)
+        let mut candidates: Vec<(PathBuf, i32)> = std::fs::read_dir(&root)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
                     .map(|e| e.path())
@@ -218,11 +218,28 @@ impl SherpaAsr {
                             }))
                         })
                     })
+                    .filter_map(|p| {
+                        // 短语音优化模型优先（2026-08 实测 eres2netv2 短段区分度优于
+                        // eres2net-base，见 engine::Scd 模块注释）：优先级
+                        // eres2netv2 > campplus > 其余 speaker 模型。
+                        let name = p
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_lowercase())
+                            .unwrap_or_default();
+                        let score = if name.contains("eres2netv2") {
+                            3
+                        } else if name.contains("campplus") {
+                            2
+                        } else {
+                            1
+                        };
+                        Some((p, score))
+                    })
                     .collect()
             })
             .unwrap_or_default();
-        candidates.sort();
-        candidates.into_iter().next()
+        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        candidates.into_iter().next().map(|(p, _)| p)
     }
 
     /// 是否向 sidecar 配置了 speaker embedding 模型（spawn 时决定；用于壳层日志）。
@@ -304,6 +321,18 @@ impl Drop for SherpaAsr {
 /// 模型），则经 [Scd] 余弦匹配决定 speaker_id / gender / is_new_speaker；
 /// 否则降级为单说话人（speaker_id=1，保持 T4 行为）——注释即契约：未配置
 /// embedding 模型时 SCD 降级，不强行用文本 hash 等伪向量制造假说话人。
+/// SCD 追溯修正的共享状态（Tauri 托管，跨 stdout 读线程与引擎排空线程）。
+///
+/// - [`Self::seq_to_segment`]：`utt_seq → segment_id`，片段被追加进管线时记录；
+/// - [`Self::corrections`]：待解析的修正队列 `(目标 utt_seq, 新说话人 id, 性别)`，
+///   由 stdout 读线程在 SCD 返回 [`engine::SpeakerCorrection`] 时入队，引擎排空
+///   线程解析成 [`EngineEvent::SpeakerCorrected`] 后出队。
+#[derive(Default)]
+pub(crate) struct CorrectionState {
+    pub seq_to_segment: Mutex<std::collections::HashMap<u64, u64>>,
+    pub corrections: Mutex<VecDeque<(u64, u32, Gender)>>,
+}
+
 fn read_stdout(
     stdout: std::process::ChildStdout,
     finals: Arc<Mutex<VecDeque<Utterance>>>,
@@ -315,6 +344,8 @@ fn read_stdout(
     handle: AppHandle,
 ) {
     use std::io::{BufRead, BufReader};
+    // 每条 final 的唯一序号：SCD 追溯修正（SpeakerCorrection）引用它。
+    let mut next_utt_seq: u64 = 0;
     let reader = BufReader::new(stdout);
     for line in reader.lines() {
         let Ok(line) = line else { break };
@@ -353,12 +384,21 @@ fn read_stdout(
                             text: text.to_string(),
                             ts: 0, // Engine 端无 ts 时由 next_utterance 填充
                             is_new_speaker: None, // 降级路径：由 Engine 按已见说话人推导
+                            utt_seq: None,
                         };
                         // 双轨降级：
                         // a) 真实 embedding —— sidecar 在 final 里附带该段音频的
-                        //    speaker embedding，经 SCD 余弦匹配决定 speaker_id
-                        //    （归入现有/新建）与性别；
+                        //    speaker embedding + 有效语音时长，经 SCD 三段式判定
+                        //    决定 speaker_id（时长门槛 / 时长自适应阈值 / 证据确认
+                        //    + 追溯修正，见 engine::Scd）与性别；
                         // b) 无 embedding —— 保持单说话人（speaker_id=1）。
+                        // sidecar 上报的有效语音时长（秒，裁静音后）；缺失按 0 处理，
+                        // 触发时长门槛 → 沿用最近说话人（稳健降级）。
+                        let speech_seconds = obj
+                            .get("speech_duration")
+                            .and_then(|v| v.as_f64())
+                            .map(|v| v as f32)
+                            .unwrap_or(0.0);
                         if let Some(arr) = obj.get("embedding").and_then(|v| v.as_array()) {
                             // NaN/Inf 防御：任一分量不是有限数字（null/字符串/NaN/Inf）
                             // → 整段视为无 embedding（走降级路径）。不静默丢弃分量：
@@ -371,12 +411,26 @@ fn read_stdout(
                                 .unwrap_or_default();
                             if !emb.is_empty() && emb.iter().all(|v| v.is_finite()) {
                                 let mut scd = scd.lock().unwrap();
-                                let d = scd.process_utterance(&text, &emb, None);
+                                let d = scd.process_utterance(next_utt_seq, &text, &emb, speech_seconds, None);
                                 utt.speaker_id = d.speaker_id;
                                 utt.is_new_speaker = Some(d.is_new_speaker);
                                 utt.gender = scd.template_gender(d.speaker_id).unwrap_or(Gender::Unknown);
+                                // 证据确认产生的追溯修正：入共享队列，由引擎排空线程
+                                // 解析成 SpeakerCorrected 事件。
+                                if !d.corrections.is_empty() {
+                                    let state = handle.state::<CorrectionState>();
+                                    let gender = scd
+                                        .template_gender(d.corrections[0].new_speaker_id)
+                                        .unwrap_or(Gender::Unknown);
+                                    let mut q = state.corrections.lock().unwrap();
+                                    for corr in d.corrections {
+                                        q.push_back((corr.utt_token, corr.new_speaker_id, gender));
+                                    }
+                                }
                             }
                         }
+                        utt.utt_seq = Some(next_utt_seq);
+                        next_utt_seq += 1;
                         finals.lock().unwrap().push_back(utt);
                     }
                 }
