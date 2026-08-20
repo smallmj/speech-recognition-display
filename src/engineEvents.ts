@@ -79,9 +79,9 @@ export const ENGINE_EVENT = "engine://event";
 /** 壳层运行状态事件名（ASR 模式等，与 `src-tauri/src/pipeline.rs` 保持一致）。 */
 export const STATUS_EVENT = "engine://status";
 
-/** 壳层状态负载：mode = sherpa（本地 ASR）| cloud（云端 ASR）| mock（合成转写演示）。 */
+/** 壳层状态负载：mode = sherpa（本地 ASR）| cloud（云端 ASR）| mock（合成转写演示）| error（配置错误，如所选模型未下载）。 */
 export interface StatusPayload {
-  mode: "sherpa" | "cloud" | "mock";
+  mode: "sherpa" | "cloud" | "mock" | "error";
   reason?: string;
   /** 本地 ASR（sherpa）的说话人分组状态：active = 按音色分人；disabled = 单说话人降级。 */
   scd?: "active" | "disabled";

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import DualTrackView, {
@@ -6,7 +6,9 @@ import DualTrackView, {
   useEngineEvents,
   type CleanupInterval,
 } from "./components/DualTrackView";
-import SettingsDialog from "./components/SettingsDialog";
+import SettingsDialog, { type TabId } from "./components/SettingsDialog";
+import { type ModelConfig, type ModelInfo } from "./components/ModelCatalogPanel";
+import { type AsrConfig } from "./components/AsrConfigPanel";
 import AsrLiveRow from "./components/AsrLiveRow";
 import MinutesPanel from "./components/MinutesPanel";
 import FirstRunWizard, { type FirstRunConfig } from "./components/FirstRunWizard";
@@ -64,6 +66,7 @@ function buildTranscriptMarkdown(
 /** 与 Rust `src-tauri/src/app_settings.rs` 的 `AppSettings` 对齐（camelCase）。 */
 interface AppSettings {
   cleanupIntervalSeconds: 5 | 10;
+  llmCleanupEnabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,13 +80,25 @@ export default function App() {
   const [bridgeReady, setBridgeReady] = useState(false);
   const [engineLive, setEngineLive] = useState(false);
   const [asrMode, setAsrMode] = useState<StatusPayload["mode"] | null>(null);
+  const [asrError, setAsrError] = useState<string | null>(null);
   const [scdStatus, setScdStatus] = useState<StatusPayload["scd"] | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // T14 首次运行：未完成时启动直接进向导；「稍后再配」本次跳过，下次启动仍回向导。
   const [firstRun, setFirstRun] = useState<FirstRunConfig | null>(null);
   const [skipFirstRun, setSkipFirstRun] = useState(false);
-  // T12 整理间隔：启动时从 Rust 常规配置加载，切换后保存并即时生效。
-  const [cleanupInterval, setCleanupInterval] = useState<CleanupInterval>(5);
+  // T12/T16 常规设置：整理间隔 + 启用 LLM 整理，App 侧为唯一写入方（避免
+  // 多写入方互相覆盖）；切换后保存到 Rust `app-settings.json` 并即时生效。
+  const [appSettings, setAppSettings] = useState<AppSettings>({
+    cleanupIntervalSeconds: 5,
+    llmCleanupEnabled: true,
+  });
+  const appSettingsRef = useRef(appSettings);
+  useEffect(() => {
+    appSettingsRef.current = appSettings;
+  }, [appSettings]);
+  const cleanupInterval = appSettings.cleanupIntervalSeconds;
+  // 打开设置时希望落到的标签页（如「缺模型 → 模型页下载」）。
+  const [settingsTab, setSettingsTab] = useState<TabId | null>(null);
   // T10 会话状态机：识别中 → 停止/生成纪要 → 纪要已生成 →（开始识别）识别中。
   const [sessionStatus, setSessionStatus] = useState<
     "idle" | "recognizing" | "stopping" | "generating" | "ready"
@@ -112,8 +127,15 @@ export default function App() {
       const st = payload as StatusPayload;
       setAsrMode(st.mode);
       setScdStatus(st.mode === "sherpa" ? (st.scd ?? null) : null);
-      if (st.reason) {
-        console.warn("[status] ASR 回退原因:", st.reason);
+      if (st.mode === "error") {
+        // T16：所选本地 ASR 缺失等配置错误 → 阻止识别并回到「未开始」。
+        setAsrError(st.reason ?? "ASR 配置错误");
+        setSessionStatus("idle");
+      } else {
+        setAsrError(null);
+        if (st.reason) {
+          console.warn("[status] ASR 回退原因:", st.reason);
+        }
       }
     });
   }, []);
@@ -126,23 +148,39 @@ export default function App() {
       .catch((e) => console.warn("[display] setAlwaysOnTop 失败:", e));
   }, [focusMode]);
 
-  // 加载已保存的常规设置（整理间隔），重启后保留。
+  // 加载已保存的常规设置（整理间隔 + LLM 开关），重启后保留。
   useEffect(() => {
     invoke<AppSettings>("load_app_settings")
-      .then((settings) => {
-        setCleanupInterval(settings.cleanupIntervalSeconds);
-      })
+      .then(setAppSettings)
       .catch((e) => console.warn("[settings] 加载常规配置失败:", e));
+  }, []);
+
+  const saveAppSettings = useCallback((next: AppSettings) => {
+    invoke("save_app_settings", { settings: next }).catch((e) =>
+      console.error("[settings] 保存常规配置失败:", e),
+    );
   }, []);
 
   // 切换整理间隔：立即更新本地展示状态，并保存到 Rust 端 app-settings.json；
   // 后台驱动线程每秒轮询该配置并热更新整理节奏，无需重启。
-  const handleCleanupIntervalChange = useCallback((seconds: CleanupInterval) => {
-    setCleanupInterval(seconds);
-    invoke("save_app_settings", { settings: { cleanupIntervalSeconds: seconds } }).catch((e) =>
-      console.error("[settings] 保存常规配置失败:", e),
-    );
-  }, []);
+  const handleCleanupIntervalChange = useCallback(
+    (seconds: CleanupInterval) => {
+      const next = { ...appSettingsRef.current, cleanupIntervalSeconds: seconds };
+      setAppSettings(next);
+      saveAppSettings(next);
+    },
+    [saveAppSettings],
+  );
+
+  // 切换「启用 LLM 整理」：保存后后台驱动线程即时生效（关闭整理/纪要，开启恢复）。
+  const handleLlmCleanupEnabledChange = useCallback(
+    (enabled: boolean) => {
+      const next = { ...appSettingsRef.current, llmCleanupEnabled: enabled };
+      setAppSettings(next);
+      saveAppSettings(next);
+    },
+    [saveAppSettings],
+  );
 
   // 全局 ESC：设置面板打开时先关面板；否则若在置顶大字模式则退出大字模式。
   // （置顶大字模式下头部被隐藏，ESC 是必须的退出途径之一。）
@@ -167,14 +205,14 @@ export default function App() {
       .then(setFirstRun)
       .catch((e) => {
         console.warn("[first-run] 读取初始化状态失败:", e);
-        setFirstRun({ completed: false, mode: "local", mirror: "huggingface" });
+        setFirstRun({ completed: false, mode: "local" });
       });
   }, []);
 
   const handleReinitialize = useCallback(() => {
     setSettingsOpen(false);
     setSkipFirstRun(false);
-    setFirstRun({ completed: false, mode: "local", mirror: "huggingface" });
+    setFirstRun({ completed: false, mode: "local" });
     invoke("reset_first_run").catch((e) =>
       console.warn("[first-run] 重置初始化状态失败:", e),
     );
@@ -235,9 +273,27 @@ export default function App() {
     invoke("stop_session").catch((e) => console.error("[session] stop_session failed:", e));
   };
 
-  const startSession = () => {
+  const startSession = async () => {
     setSessionStatus("recognizing");
     setMinutes(null);
+    // T16：来源=本地且所选 ASR 未下载 → 不开始，打开设置「模型」页引导下载
+    // （后端也会兜底阻止并提示）。
+    try {
+      const asrCfg = await invoke<AsrConfig>("load_asr_config");
+      if (asrCfg.source === "local") {
+        const cfg = await invoke<ModelConfig>("load_model_config");
+        const models = await invoke<ModelInfo[]>("list_models");
+        const selected = models.find((m) => m.id === cfg.asrModel);
+        if (selected && !selected.downloaded) {
+          setSessionStatus("idle");
+          setSettingsTab("model");
+          setSettingsOpen(true);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("[session] 模型预检失败（交由后端兜底）:", e);
+    }
     invoke("start_session").catch((e) => console.error("[session] start_session failed:", e));
   };
 
@@ -277,10 +333,11 @@ export default function App() {
             className={`badge ${
               asrMode === "sherpa" || asrMode === "cloud"
                 ? "badge-on"
-                : asrMode === "mock"
+                : asrMode === "mock" || asrMode === "error"
                   ? "badge-off"
                   : "badge-wait"
             }`}
+            title={asrError ?? undefined}
           >
             {asrMode === "sherpa"
               ? "本地 ASR（sherpa-onnx）"
@@ -288,11 +345,18 @@ export default function App() {
                 ? "云端 ASR（流式）"
                 : asrMode === "mock"
                   ? "演示模式（合成转写）"
-                  : "ASR 初始化中…"}
+                  : asrMode === "error"
+                    ? "ASR 配置错误"
+                    : "ASR 初始化中…"}
           </span>
           {asrMode === "sherpa" && scdStatus && (
             <span className={`badge ${scdStatus === "active" ? "badge-on" : "badge-off"}`}>
               {scdStatus === "active" ? "按音色分人" : "单说话人降级"}
+            </span>
+          )}
+          {!appSettings.llmCleanupEnabled && (
+            <span className="badge badge-off" title="LLM 整理已关闭，字幕保持原文；可到设置「LLM 整理」重新启用">
+              LLM 整理已关闭
             </span>
           )}
           <span className={`badge ${sessionBadge.cls}`}>{sessionBadge.text}</span>
@@ -373,8 +437,12 @@ export default function App() {
           onClose={closeSettings}
           cleanupInterval={cleanupInterval}
           onCleanupIntervalChange={handleCleanupIntervalChange}
+          llmCleanupEnabled={appSettings.llmCleanupEnabled}
+          onLlmCleanupEnabledChange={handleLlmCleanupEnabledChange}
           latestMinutes={minutes}
           onReinitialize={handleReinitialize}
+          initialTab={settingsTab}
+          onInitialTabConsumed={() => setSettingsTab(null)}
         />
       </div>
     </DisplayContext.Provider>

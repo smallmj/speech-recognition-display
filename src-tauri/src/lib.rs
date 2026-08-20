@@ -23,6 +23,7 @@ mod export;
 mod first_run;
 mod llm;
 mod model_paths;
+mod models;
 mod pipeline;
 mod sessions;
 
@@ -39,6 +40,7 @@ pub fn run() {
         .setup(|app| {
             app.manage(pipeline::SessionControl::default());
             app.manage(asr::CorrectionState::default());
+            app.manage(models::ModelDownloadRegistry::default());
             bridge::spawn_ping_emitter(app.handle());
             // 主事件源（T4 + T9 + T10 整合）：真实 ASR（sherpa-onnx + 麦克风）优先，
             // 失败回退合成转写演示模式；final 转写 → 整理管线 → 真实 LLM（SSE）
@@ -54,6 +56,12 @@ pub fn run() {
             llm::list_llm_models,
             asr_config::load_asr_config,
             asr_config::save_asr_config,
+            models::load_model_config,
+            models::save_model_config,
+            models::list_models,
+            models::download_model_async,
+            models::cancel_download,
+            models::delete_model,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             first_run::load_first_run_config,

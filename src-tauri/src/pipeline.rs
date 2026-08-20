@@ -5,7 +5,8 @@
 //!   Deepgram 兼容 WebSocket；驱动线程每秒重读配置，来源变化时只替换 ASR
 //!   端口，不重建整理管线/说话人状态，切换对字幕链路保持无缝。本地失败回退
 //!   mock；云端失败回退本地，再失败回退 mock。模式经 `engine://status`
-//!   事件告知前端（`{"mode":"sherpa"|"cloud"|"mock"}`）。
+//!   事件告知前端（`{"mode":"sherpa"|"cloud"|"mock"|"error"}`）；T16 起
+//!   来源=本地且所选 ASR 模型缺失时 `mode:"error"`（阻止开始，不降级 mock）。
 //! - **final 统一进整理管线（T9）**：无论真实还是合成，final 转写都直接喂入
 //!   [engine::CleanupPipeline]（防抖 + 固定节奏 + 单在途），驱动线程周期
 //!   `tick(now)` 冻结并派发 `pending`，**LLM 请求交给独立 worker 线程**
@@ -285,15 +286,23 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
             if app_settings_poll_ticks >= APP_SETTINGS_POLL_TICKS {
                 app_settings_poll_ticks = 0;
                 let next_app_config = app_settings::read_config(&handle);
-                if next_app_config.cleanup_interval_seconds
-                    != app_config.cleanup_interval_seconds
-                {
-                    println!(
-                        "[settings] 整理间隔 {}s → {}s（即时生效）",
-                        app_config.cleanup_interval_seconds,
-                        next_app_config.cleanup_interval_seconds
-                    );
-                    pipeline.set_rhythm_duration(next_app_config.cleanup_interval());
+                if next_app_config != app_config {
+                    if next_app_config.cleanup_interval_seconds
+                        != app_config.cleanup_interval_seconds
+                    {
+                        println!(
+                            "[settings] 整理间隔 {}s → {}s（即时生效）",
+                            app_config.cleanup_interval_seconds,
+                            next_app_config.cleanup_interval_seconds
+                        );
+                        pipeline.set_rhythm_duration(next_app_config.cleanup_interval());
+                    }
+                    if next_app_config.llm_cleanup_enabled != app_config.llm_cleanup_enabled {
+                        println!(
+                            "[settings] LLM 整理{}（即时生效）",
+                            if next_app_config.llm_cleanup_enabled { "启用" } else { "关闭" }
+                        );
+                    }
                     app_config = next_app_config;
                 }
             }
@@ -326,30 +335,46 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
             // 2. 会话控制：收到「开始识别」且已停止完成 → 启动/复用 ASR 并重建
             //    管线开新会话；收到「停止并生成纪要」→ 停止追加并进入纪要停止流程。
             if !running && !stopping && control.start_requested.swap(false, Ordering::Relaxed) {
-                // 停止期间 ASR 可能仍积累 final：丢弃，避免旧会话内容混入新会话。
-                if let (Some(asr_ref), Some(mode_ref)) = (asr.as_mut(), mode.as_ref()) {
-                    discard_asr_inputs(asr_ref, mode_ref);
-                }
                 let next_config = asr_config::read_config(&handle);
-                // 每次「开始识别」都重新拉起 ASR：让模型补齐/云端配置变更立即生效，
-                // 也避免先以 mock 回退启动后，后续会话仍复用旧 mock。
-                if let Some(mut old) = asr.take() {
-                    old.stop();
+                // T16：来源=本地且所选 ASR 模型缺失 → 阻止开始并引导去设置下载
+                // （不降级 mock，避免用户误以为在识别）。
+                let startable = if next_config.effective_source() == AsrSource::Local {
+                    match crate::models::selected_asr_dir(&handle) {
+                        Ok(_) => true,
+                        Err(reason) => {
+                            println!("[engine] {reason}");
+                            emit_asr_status(&handle, "error", Some(reason));
+                            false
+                        }
+                    }
+                } else {
+                    true
+                };
+                if startable {
+                    // 停止期间 ASR 可能仍积累 final：丢弃，避免旧会话内容混入新会话。
+                    if let (Some(asr_ref), Some(mode_ref)) = (asr.as_mut(), mode.as_ref()) {
+                        discard_asr_inputs(asr_ref, mode_ref);
+                    }
+                    // 每次「开始识别」都重新拉起 ASR：让模型补齐/云端配置变更立即生效，
+                    // 也避免先以 mock 回退启动后，后续会话仍复用旧 mock。
+                    if let Some(mut old) = asr.take() {
+                        old.stop();
+                    }
+                    let (next_asr, next_mode, next_active) =
+                        start_asr_with_fallback(&handle, &next_config);
+                    asr = Some(next_asr);
+                    mode = Some(next_mode);
+                    active_source = next_active;
+                    last_attempted_source = next_config.effective_source();
+                    config = next_config;
+                    pipeline = CleanupPipeline::new_with_defaults(Box::new(MockLlmPort));
+                    pipeline.set_rhythm_duration(app_config.cleanup_interval());
+                    now = Duration::ZERO;
+                    known_speakers.clear();
+                    dispatched_edit_id = None;
+                    running = true;
+                    emit(&handle, EngineEvent::SessionStarted);
                 }
-                let (next_asr, next_mode, next_active) =
-                    start_asr_with_fallback(&handle, &next_config);
-                asr = Some(next_asr);
-                mode = Some(next_mode);
-                active_source = next_active;
-                last_attempted_source = next_config.effective_source();
-                config = next_config;
-                pipeline = CleanupPipeline::new_with_defaults(Box::new(MockLlmPort));
-                pipeline.set_rhythm_duration(app_config.cleanup_interval());
-                now = Duration::ZERO;
-                known_speakers.clear();
-                dispatched_edit_id = None;
-                running = true;
-                emit(&handle, EngineEvent::SessionStarted);
             }
 
             if running && control.stop_requested.swap(false, Ordering::Relaxed) {
@@ -423,6 +448,21 @@ pub fn spawn_engine_emitter(app: &AppHandle) {
                 if let Some(p) = pipeline.pending().cloned() {
                     if dispatched_edit_id == Some(p.edit_id) {
                         // 已派发过：等结果回来（尾部 sleep 统一执行）。
+                    } else if !app_config.llm_cleanup_enabled {
+                        // T16：LLM 整理已关闭 → 不调 LLM，直接把原文当整理结果回填
+                        // （双轨「整理版」等同原文），不留 pending、不产生整理中状态。
+                        dispatched_edit_id = Some(p.edit_id);
+                        println!(
+                            "[llm] LLM 整理已关闭，speaker {} segments {:?} 回填原文",
+                            p.speaker_id, p.segment_ids
+                        );
+                        for evt in pipeline.apply_cleanup_result(
+                            &p.segment_ids,
+                            p.raw.clone(),
+                            p.edit_id,
+                        ) {
+                            emit(&handle, evt);
+                        }
                     } else {
                         dispatched_edit_id = Some(p.edit_id);
                         let tx = llm_result_tx.clone();
@@ -551,6 +591,17 @@ fn current_minutes_llm(handle: &AppHandle) -> MinutesLlm {
 /// 尽力不丢内容。
 fn run_minutes(handle: &AppHandle, pipeline: &CleanupPipeline) {
     emit(handle, EngineEvent::SessionStopped);
+    // T16：LLM 整理关闭 → 纪要禁用（不调用 LLM），给出明确提示。
+    if !app_settings::read_config(handle).llm_cleanup_enabled {
+        emit(
+            handle,
+            EngineEvent::MinutesReady {
+                minutes: "LLM 整理已关闭，未生成会议纪要。如需纪要，请到设置「LLM 整理」重新启用。"
+                    .to_string(),
+            },
+        );
+        return;
+    }
     let segments: Vec<engine::Segment> = pipeline.store().segments().to_vec();
     let batches = chunk_for_summarize(&segments, BATCH_MAX_CHARS);
     if batches.is_empty() {
