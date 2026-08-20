@@ -1,0 +1,134 @@
+name: Release
+
+# 打 tag（v*）或手动触发即出安装包：macOS(arm64/x64) DMG + Windows(x64) NSIS，
+# 产物挂到 GitHub Releases（草稿，人工确认后发布）。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: bundle (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15 # Apple Silicon (arm64)
+            label: macos-arm64
+            artifact: talksee-macos-arm64
+          - os: macos-15-intel # Intel (x86_64)
+            label: macos-x64
+            artifact: talksee-macos-x64
+          - os: windows-latest
+            label: windows-x64
+            artifact: talksee-windows-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Rust tests
+        run: cargo test --workspace
+
+      # beforeBuildCommand 会执行 `pnpm build && pnpm package:runtime`；
+      # TALKSEE_STANDALONE=1 让 package:runtime 下载自包含 Python 打进资源，
+      # 产物换机器可跑（而不是拷贝本机开发 venv）。
+      - name: Build bundles (self-contained Python runtime)
+        run: pnpm tauri build
+        env:
+          TALKSEE_STANDALONE: "1"
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            **/release/bundle/**/*.dmg
+            **/release/bundle/**/*.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version and tag
+        id: version
+        run: |
+          VER="$(jq -r .version src-tauri/tauri.conf.json)"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag_name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=v$VER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
+      - name: Write release body
+        run: |
+          cat > RELEASE_BODY.md <<'MD'
+          ## TalkSee v${{ steps.version.outputs.version }}
+
+          > 免签名版：macOS 与 Windows 首次安装会收到系统安全提示，按下方说明放行即可。
+
+          ### macOS
+          - Apple Silicon 选 `*_aarch64.dmg`，Intel 选 `*_x86_64.dmg`
+          - 安装：打开 DMG，把「TalkSee」拖入「应用程序」，然后首次打开时
+            **右键点应用 → 打开 → 确认**（未签名/未公证应用的常规放行方式）。
+
+          ### Windows
+          - 下载 `*_x64-setup.exe`（NSIS 一键安装）
+          - 若 SmartScreen 提示"Windows 已保护你的电脑"，点 **更多信息 → 仍要运行**。
+
+          ### 说明
+          - 首次启动需联网下载识别模型（可选国内镜像），之后本地离线识别，音频不出本机。
+          - 本版为静态安装包；应用内自动更新尚未启用，升级请到 Releases 下载新版。
+          MD
+
+      - name: Publish release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: TalkSee v${{ steps.version.outputs.version }}
+          body_path: RELEASE_BODY.md
+          files: |
+            bundles/**/*.dmg
+            bundles/**/*.exe
+          draft: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -11,8 +11,8 @@
 > 实时把周围人的话转成文字，按说话人显示为彩色气泡 + 随机头像；经 LLM 自动整理成通顺书面语，
 > 会话结束后一键生成结构化会议纪要。**MVP 已验证可行，所有功能以 Tauri 2 + Rust engine + Python sherpa-onnx 落地。**
 
-- 版本：v0.2.0
-- 构建：[![CI](https://github.com/smallmj/talksee/actions/workflows/ci.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/ci.yml)
+- 版本：v0.3.0
+- 构建：[![CI](https://github.com/smallmj/talksee/actions/workflows/ci.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/ci.yml) · [![Release](https://github.com/smallmj/talksee/actions/workflows/release.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/release.yml)
 - 许可：[MIT](LICENSE) · 规格：[Issue #1](https://github.com/smallmj/talksee/issues/1)（已关闭）
 - 实现总结：`docs/T*-implementation-summary.md` · 架构决策见 `docs/adr/`
 
@@ -138,13 +138,53 @@ pnpm tauri dev          # 启动开发模式
 > 缺模型 / 想换识别模型：设置 →「模型」页下载或切换；云端 ASR、LLM 整理分别在
 > 设置对应页配置（OpenAI 兼容：Base URL + API Key + 模型名）。
 
+## 下载与安装（正式发布）
+
+从 [GitHub Releases](https://github.com/smallmj/talksee/releases) 下载对应平台的安装包：
+
+| 平台 | 安装包 | 说明 |
+|------|--------|------|
+| macOS（Apple Silicon） | `TalkSee_*_aarch64.dmg` | 打开 DMG，把 TalkSee 拖入「应用程序」 |
+| macOS（Intel） | `TalkSee_*_x86_64.dmg` | 同上 |
+| Windows | `TalkSee_*_x64-setup.exe` | NSIS 一键安装 |
+
+> **免签名版**：代码签名/公证尚未启用，首次安装会收到系统安全提示，按下面放行即可。
+
+**macOS**：首次打开若提示"无法验证开发者"，请**右键点 TalkSee → 打开 → 确认**；
+或拖入「应用程序」后执行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/TalkSee.app"
+```
+
+**Windows**：若 SmartScreen 提示"Windows 已保护你的电脑"，点 **更多信息 → 仍要运行**。
+
+首次启动进入初始化向导：检测运行环境并下载识别模型（可选国内镜像），之后本地离线识别，音频不出本机。
+
 ## 打包
 
 ```bash
-pnpm tauri build   # 构建期自动执行 pnpm build + package:runtime（打入 Python 运行时）
+pnpm tauri build                          # 本地验证：构建期自动执行 pnpm build + package:runtime
+TALKSEE_STANDALONE=1 pnpm tauri build     # 正式分发：打入自包含 Python（python-build-standalone），换机可跑
 ```
 
-产物在 `src-tauri/target/release/bundle/`。打包版运行时已内置，首启只做健康检测与模型下载。
+产物在 `target/release/bundle/`（macOS DMG：`bundle/dmg/`；Windows NSIS：`bundle/nsis/`）。
+默认模式直接复制本机 `src-tauri/.venv`，仅适合本机验收；**正式发布务必用 `TALKSEE_STANDALONE=1`**
+（GitHub Actions 发布流程已默认开启）。打包版运行时已内置，首启只做健康检测与模型下载。
+
+## 发布新版本
+
+1. 同步版本号：`src-tauri/tauri.conf.json` / `Cargo.toml` / `package.json` 三处一致。
+2. 打 tag 并推送，CI 自动构建 macOS/Windows 安装包并创建**草稿** Release：
+
+   ```bash
+   git tag v0.3.0 && git push origin v0.3.0
+   ```
+
+3. 到 GitHub Releases 检查草稿、确认无误后点发布。
+
+工作流 [`.github/workflows/release.yml`](.github/workflows/release.yml)：macOS（arm64/x64）出 DMG、
+Windows（x64）出 NSIS；tag 触发，也支持仓库页手动触发（Actions → Release → Run workflow）。
 
 ## 测试
 
@@ -169,7 +209,7 @@ docs/                 ADR、Ticket 索引、各票实现总结、调研报告
 
 ## 已知边界（MVP）
 
-- 打包/签名（DMG/MSI 与代码签名）延后，开发期用开发模式运行
+- 安装包未做代码签名/公证（macOS Gatekeeper 与 Windows SmartScreen 会提示，放行方式见「下载与安装」）；应用内自动更新尚未启用
 - 仅面对面麦克风采集；不采集系统/在线会议音频；无气泡回放
 - SCD 只做切换检测 + 手动命名，不做全自动 diarization / 跨天身份持久化
 - 头像性别不按音色自动选择；无自定义滚动方式；无识别中暂停/继续（详见 Issue #1 Out of Scope）

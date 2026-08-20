@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TalkSee",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.smallmj.talksee",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -27,9 +27,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "dmg",
+      "nsis"
+    ],
     "resources": {
-      "resources/runtime/**/*": "runtime/"
+      "resources/runtime": "runtime"
     },
     "icon": [
       "icons/32x32.png",

@@ -22,6 +22,7 @@
 | T14 | — | 首次运行初始化向导 + 手动开始识别 | T13 | ✅ 已合并 (PR #23) |
 | T15 | — | SCD 幻影说话人修复（短句/噪声每条 final 都新建）| T5 | ✅ 已合并 (PR #25) |
 | T16 | [#27](https://github.com/smallmj/talksee/issues/27) | ASR/Embedding 模型选择 + 双端配置 + LLM 整理开关 | T7, T9 | ✅ 已合并 (PR #28) |
+| T17 | — | 发布管线：自包含运行时 + GitHub Release（DMG/NSIS） | T14, T16 | 🟢 frontier（本 PR 待合） |
 
 ## 🔴 Blocked（等前置票）
 
@@ -39,4 +40,5 @@ T1 ✅
           T12 ✅ ◀────────────────┘
           T15 ✅ ─（SCD 修复，接 T5）
           T16 ✅ ─（模型选择，接 T7/T9）
+          T17 🟢 ─（发布管线，接 T14/T16）
 ```
