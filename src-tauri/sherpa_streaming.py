@@ -37,6 +37,7 @@ T5 SCD speaker embedding 模型（可选）：
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import re
 import struct
@@ -102,7 +103,6 @@ class StreamingRecognizer:
         decoder = self._find("decoder", [".onnx", ".int8.onnx"])
         joiner = self._find("joiner", [".int8.onnx", ".onnx"])
         tokens = self.model_dir / "tokens.txt"
-        bpe = self.model_dir / "bpe.model"
 
         if not all(p.is_file() for p in (encoder, decoder, joiner, tokens)):
             raise FileNotFoundError(
@@ -110,7 +110,7 @@ class StreamingRecognizer:
                 "encoder/decoder/joiner 的 .onnx（可带 int8/epoch 后缀）+ tokens.txt"
             )
 
-        # BPE 模型需要 bpe.model；CJK 字符模型（无 bpe.model）用 modeling_unit="cjk"
+        # BPE 模型需要 bpe.model；CJK 字符模型（无 bpe.model）用 modeling_unit="cjkchar"
         bpe = self.model_dir / "bpe.model"
         has_bpe = bpe.is_file()
 
@@ -132,7 +132,7 @@ class StreamingRecognizer:
             recognizer_kwargs["modeling_unit"] = "bpe"
             recognizer_kwargs["bpe_vocab"] = str(bpe)
         else:
-            recognizer_kwargs["modeling_unit"] = "cjk"
+            recognizer_kwargs["modeling_unit"] = "cjkchar"
 
         self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(**recognizer_kwargs)
         self.stream = self.recognizer.create_stream()
@@ -275,10 +275,12 @@ def emit(obj: dict):
     sys.stdout.buffer.write(json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
     try:
         sys.stdout.buffer.flush()
-    except OSError:
-        # Windows 管道模式下 flush 可能报 Invalid argument，忽略即可
-        # （数据已 write 到内核缓冲区，Tauri 端 read 时会正常收到）
-        pass
+    except OSError as e:
+        # Windows 管道模式下 flush 可能报 "Invalid argument"(EINVAL)：数据已写入
+        # 内核缓冲区，Tauri 端 read 时仍能收到，忽略该特定错误即可；其余 OSError
+        # （如管道已断 EPIPE）照常抛出，避免掩盖真实的 I/O 交付失败。
+        if e.errno != errno.EINVAL:
+            raise
 
 
 def final_event(text: str, seg_samples: np.ndarray | None, embedder: SpeakerEmbedder | None, sample_rate: int = 16000) -> dict:
