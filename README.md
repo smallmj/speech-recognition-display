@@ -11,7 +11,7 @@
 > 实时把周围人的话转成文字，按说话人显示为彩色气泡 + 随机头像；经 LLM 自动整理成通顺书面语，
 > 会话结束后一键生成结构化会议纪要。**MVP 已验证可行，所有功能以 Tauri 2 + Rust engine + Python sherpa-onnx 落地。**
 
-- 版本：v0.3.0
+- 版本：v0.3.1
 - 构建：[![CI](https://github.com/smallmj/talksee/actions/workflows/ci.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/ci.yml) · [![Release](https://github.com/smallmj/talksee/actions/workflows/release.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/release.yml)
 - 许可：[MIT](LICENSE) · 规格：[Issue #1](https://github.com/smallmj/talksee/issues/1)（已关闭）
 - 实现总结：`docs/T*-implementation-summary.md` · 架构决策见 `docs/adr/`
@@ -178,7 +178,7 @@ TALKSEE_STANDALONE=1 pnpm tauri build     # 正式分发：打入自包含 Pytho
 2. 打 tag 并推送，CI 自动构建 macOS/Windows 安装包并创建**草稿** Release：
 
    ```bash
-   git tag v0.3.0 && git push origin v0.3.0
+   git tag v0.3.1 && git push origin v0.3.1
    ```
 
 3. 到 GitHub Releases 检查草稿、确认无误后点发布。
