@@ -34,3 +34,10 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 # 重复启动聚焦已有实例（避免麦克风/ASR 被多实例竞争）。
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
+# 应用内自动更新（T19）：Windows 走 tauri-plugin-updater 全自动更新（NSIS
+# installMode=passive），macOS 未签名/未公证走「检测新版本 → 打开 Releases 页
+# 手动下载」。dialog/process/opener 分别用于确认弹窗、更新后重启、打开浏览器。
+tauri-plugin-updater = { version = "2", features = ["rustls-tls"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
+tauri-plugin-opener = "2"

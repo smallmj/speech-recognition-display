@@ -14,11 +14,13 @@ use tauri::{AppHandle, Manager};
 /// 打包版运行时在 resource 目录下的子目录（与 `tauri.conf.json` resources 对应）。
 const PACKAGED_RUNTIME_DIR: &str = "runtime";
 
-/// 运行时路径：Python 可执行文件 + sidecar 脚本。
+/// 运行时路径：Python 可执行文件 + sidecar 脚本 + Silero VAD 模型（v0.4，可选）。
 #[derive(Debug, Clone)]
 pub struct RuntimePaths {
     pub python: PathBuf,
     pub script: PathBuf,
+    /// Silero VAD ONNX 路径；缺失 → 调用方降级为 ASR 端点定稿（不启动 VAD 切片）。
+    pub vad_model: Option<PathBuf>,
 }
 
 /// 解析 Python 运行时内的解释器路径。
@@ -62,9 +64,11 @@ pub fn model_root(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn runtime_paths(app: &AppHandle) -> Result<RuntimePaths, String> {
     if tauri::is_dev() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let vad = manifest.join("asr-models").join("silero_vad").join("silero_vad.onnx");
         Ok(RuntimePaths {
             python: venv_python(&manifest.join(".venv")),
             script: manifest.join("sherpa_streaming.py"),
+            vad_model: if vad.is_file() { Some(vad) } else { None },
         })
     } else {
         let resource_dir = app
@@ -72,9 +76,11 @@ pub fn runtime_paths(app: &AppHandle) -> Result<RuntimePaths, String> {
             .resource_dir()
             .map_err(|e| format!("无法获取 app 资源目录: {e}"))?;
         let runtime = resource_dir.join(PACKAGED_RUNTIME_DIR);
+        let vad = runtime.join("silero_vad.onnx");
         Ok(RuntimePaths {
             python: venv_python(&runtime.join("venv")),
             script: runtime.join("sherpa_streaming.py"),
+            vad_model: if vad.is_file() { Some(vad) } else { None },
         })
     }
 }

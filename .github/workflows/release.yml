@@ -1,7 +1,8 @@
 name: Release
 
-# 打 tag（v*）或手动触发即出安装包：macOS(arm64/x64) DMG + Windows(x64) NSIS，
-# 产物挂到 GitHub Releases（草稿，人工确认后发布）。
+# 打 tag（v*）或手动触发即出安装包：macOS(arm64/x64) DMG + Windows(x64) NSIS。
+# releaseDraft: true 保持「人工确认后发布」门禁：tauri-action 创建草稿 Release，
+# 合并各平台产物与签名数据，并自动生成 latest.json（Windows 应用内自动更新端点）。
 on:
   push:
     tags:
@@ -57,78 +58,24 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace
 
-      # beforeBuildCommand 会执行 `pnpm build && pnpm package:runtime`；
-      # TALKSEE_STANDALONE=1 让 package:runtime 下载自包含 Python 打进资源，
-      # 产物换机器可跑（而不是拷贝本机开发 venv）。
-      - name: Build bundles (self-contained Python runtime)
-        run: pnpm tauri build
-        env:
-          TALKSEE_STANDALONE: "1"
-
-      - name: Upload bundle artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: |
-            **/release/bundle/**/*.dmg
-            **/release/bundle/**/*.exe
-          if-no-files-found: error
-
-  publish:
-    name: Publish GitHub Release
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve version and tag
-        id: version
-        run: |
-          VER="$(jq -r .version src-tauri/tauri.conf.json)"
-          echo "version=$VER" >> "$GITHUB_OUTPUT"
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "tag_name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag_name=v$VER" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download all bundles
-        uses: actions/download-artifact@v4
-        with:
-          path: bundles
-          merge-multiple: true
-
-      - name: Write release body
-        run: |
-          cat > RELEASE_BODY.md <<'MD'
-          ## TalkSee v${{ steps.version.outputs.version }}
-
-          > 免签名版：macOS 与 Windows 首次安装会收到系统安全提示，按下方说明放行即可。
-
-          ### macOS
-          - Apple Silicon 选 `*_aarch64.dmg`，Intel 选 `*_x64.dmg`
-          - 安装：打开 DMG，把「TalkSee」拖入「应用程序」，然后首次打开时
-            **右键点应用 → 打开 → 确认**（未签名/未公证应用的常规放行方式）。
-
-          ### Windows
-          - 下载 `*_x64-setup.exe`（NSIS 一键安装）
-          - 若 SmartScreen 提示"Windows 已保护你的电脑"，点 **更多信息 → 仍要运行**。
-
-          ### 说明
-          - 首次启动需联网下载识别模型（可选国内镜像），之后本地离线识别，音频不出本机。
-          - 本版为静态安装包；应用内自动更新尚未启用，升级请到 Releases 下载新版。
-          MD
-
-      - name: Publish release (draft)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag_name }}
-          name: TalkSee v${{ steps.version.outputs.version }}
-          body_path: RELEASE_BODY.md
-          files: |
-            bundles/**/*.dmg
-            bundles/**/*.exe
-          draft: true
-          fail_on_unmatched_files: true
+      # tauri-action 读取 tauri.conf.json 的 beforeBuildCommand（`pnpm build &&
+      # pnpm package:runtime`）与 createUpdaterArtifacts（生成签名后的
+      # latest.json + .sig）；TALKSEE_STANDALONE=1 让 package:runtime 下载
+      # 自包含 Python 打进资源，产物换机器可跑。target 由 runner 自动探测
+      # （macos-15 → aarch64-apple-darwin，macos-15-intel → x86_64-apple-darwin，
+      # windows-latest → x86_64-pc-windows-msvc）。
+      # draft=true 门禁：tauri-action 按 tagName 创建/复用草稿 Release 并合并
+      # 各平台产物，人工确认后发布；发布后 latest.json 即可供应用内自动更新。
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TALKSEE_STANDALONE: "1"
+        with:
+          tagName: v__VERSION__
+          releaseName: 'TalkSee v__VERSION__'
+          releaseBody: 'See the assets to download this version and install.'
+          releaseDraft: true
+          prerelease: false

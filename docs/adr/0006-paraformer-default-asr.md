@@ -1,0 +1,6 @@
+# 本地 ASR 默认模型由 2023 zipformer 换成 streaming paraformer（SenseVoice 作可选高精度模式）
+
+用户反馈识别率不如手机微信语音。调研（2026-08，sherpa-onnx 1.13.6 实测）：**没有 sherpa-onnx 2.x 可升级**（最新即 1.13.6，2.0 预告是 TTS 许可整改）；2023-02-20 之后没有更新的「中英双语」流式 zipformer（网传 2025-06-30 版本系幻觉）；X-ASR（1M 小时、带标点）纸面最优但 1.13.6 与 master 均加载即崩溃（缺 `encoder_dims` 元数据，issue #27）。因此默认模型换成 **streaming paraformer bilingual zh-en（int8 ≈237MB）**：真流式（chunk≈1s，延迟 <1s）、中英双语、英文整句与抗噪明显优于 2023、支持中文方言，1.13.6 直接 `from_paraformer` 接入；2023 zipformer 保留作低资源回溯选项。**SenseVoice（int8 ≈239MB）作为「高精度模式」可选**：ITN + 标点（五千八百块→5800块），最接近微信，但非流式，延迟≈整句 2–4s——Q2 决定低延迟优先，故默认仍走流式，SenseVoice 由用户手动切换。
+
+- **Considered Options**: 等 X-ASR 上游修复（无时间表，且当前任何版本不可加载）；纯中文 2025-06-30 zipformer（AISHELL-1 CER 1.91% 最优但英文全毁成拼音）；换 embedding 模型（调研结论：ERes2NetV2 已是 sherpa 能加载的中文最优，不换）。
+- **Consequences**: `models.rs` 内置目录新增 paraformer（新默认）+ SenseVoice 两个 ASR 条目并标注 `model_family`（transducer/paraformer/sense-voice）供 sidecar 选择解码路径；用户首次升级后需重下 237MB 模型（首启向导已有下载流程）；SenseVoice 模式失去边说边出的 partial（设置页提示延迟变大的取舍）。

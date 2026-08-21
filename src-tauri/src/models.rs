@@ -106,6 +106,10 @@ pub struct ModelEntry {
     pub size_bytes: u64,
     /// 同类默认项标记。
     pub default: bool,
+    /// sidecar 模型族标识（仅 ASR 有意义）：transducer / paraformer / sense-voice。
+    /// 由 [`selected_asr_kind`] 读出并传给 sidecar `--model-kind`；Embedding 类为 `""`。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model_family: String,
     pub description: ModelDescription,
 }
 
@@ -158,6 +162,7 @@ fn entry(
     files: &[&str],
     size_bytes: u64,
     default: bool,
+    model_family: &str,
     description: ModelDescription,
 ) -> ModelEntry {
     ModelEntry {
@@ -169,6 +174,7 @@ fn entry(
         files: files.iter().map(|s| s.to_string()).collect(),
         size_bytes,
         default,
+        model_family: model_family.to_string(),
         description,
     }
 }
@@ -190,11 +196,56 @@ fn entry(
 pub fn all_models() -> &'static [ModelEntry] {
     static MODELS: OnceLock<Vec<ModelEntry>> = OnceLock::new();
     MODELS.get_or_init(|| vec![
-        // ---- ASR（sherpa-onnx 流式转写）----
+        // ---- ASR（sherpa-onnx 流式转写；v0.4 换 paraformer 为默认，见 ASR 选型调研）----
+        entry(
+            "sherpa-onnx-streaming-paraformer-bilingual-zh-en",
+            ModelKind::Asr,
+            "paraformer 中英双语（流式，v0.4 默认）",
+            "csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en",
+            "sherpa-onnx-streaming-paraformer-bilingual-zh-en",
+            &[
+                "encoder.int8.onnx",
+                "decoder.int8.onnx",
+                "tokens.txt",
+            ],
+            237_202_501,
+            true,
+            "paraformer",
+            desc(
+                "中英双语（FunASR online paraformer，支持中文方言）",
+                "真流式（chunk≈1s，边说边出字）",
+                "双核 CPU + 4GB 内存即可；2 线程推理（文档 RTF 0.15–0.21 @4线程，实测远快于实时）",
+                "Apache-2.0",
+                "macOS / Windows（纯 CPU，无需 GPU）",
+                "v0.4 默认：英文整句与抗噪明显优于 2023 zipformer（选型调研实测）",
+            ),
+        ),
+        entry(
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+            ModelKind::Asr,
+            "SenseVoice 高精度（VAD 切句，非流式）",
+            "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+            &[
+                "model.int8.onnx",
+                "tokens.txt",
+            ],
+            239_549_735,
+            false,
+            "sense-voice",
+            desc(
+                "中英日韩粤（应式）多语",
+                "非流式：VAD 切句后逐句识别（每句延迟≈句长 2–4s）",
+                "双核 CPU + 4GB 内存即可；2 线程推理",
+                "Apache-2.0（见 FunAudioLLM）",
+                "macOS / Windows（纯 CPU，无需 GPU）",
+                "「高精度模式」：ITN + 标点（五千八百块→5800块），最接近微信；选它请接受整句延迟",
+            ),
+        ),
         entry(
             "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
             ModelKind::Asr,
-            "zipformer 中英双语（2023-02-20）",
+            "zipformer 中英双语（2023-02-20，回溯）",
             "csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
             "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
             &[
@@ -205,17 +256,18 @@ pub fn all_models() -> &'static [ModelEntry] {
                 "tokens.txt",
             ],
             199_301_041,
-            true,
+            false,
+            "transducer",
             desc(
                 "中英双语",
                 "流式（边说边出字）",
                 "双核 CPU + 4GB 内存即可；2 线程推理",
                 "Apache-2.0",
                 "macOS / Windows（纯 CPU，无需 GPU）",
-                "已验证与 sherpa-onnx 1.13.6 兼容的默认模型（2023 版），文件略大",
+                "v0.3 默认；保留作低资源/回溯选项（英文与噪声场景弱于 paraformer）",
             ),
         ),
-        // ---- 说话人 speaker embedding（T5 SCD，可选）----
+        // ---- 说话人 speaker embedding（T5 SCD，可选，无模型族）----
         entry(
             "sherpa-onnx-3dspeaker-eres2netv2-base",
             ModelKind::Embedding,
@@ -225,6 +277,7 @@ pub fn all_models() -> &'static [ModelEntry] {
             &["3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx"],
             71_441_526,
             true,
+            "",
             desc(
                 "中文说话人 embedding",
                 "每句一次向量提取",
@@ -243,6 +296,7 @@ pub fn all_models() -> &'static [ModelEntry] {
             &["3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"],
             39_593_761,
             false,
+            "",
             desc(
                 "中文说话人 embedding",
                 "每句一次向量提取",
@@ -261,6 +315,7 @@ pub fn all_models() -> &'static [ModelEntry] {
             &["wespeaker_zh_cnceleb_resnet34.onnx"],
             26_534_363,
             false,
+            "",
             desc(
                 "中文说话人 embedding（CN-Celeb 训练）",
                 "每句一次向量提取",
@@ -349,6 +404,19 @@ pub fn selected_embedding_dir(app: &AppHandle) -> Option<PathBuf> {
         return None;
     }
     Some(dir)
+}
+
+/// 所选 ASR 的 sidecar 模型族标识（transducer / paraformer / sense-voice）。
+///
+/// 由 `model-config.json` 所选 ASR 的 manifest `model_family` 决定；未知配置
+/// 回退 `transducer`（sidecar 的 auto 探测兜底，行为与旧版一致）。
+pub fn selected_asr_kind(app: &AppHandle) -> String {
+    let config = read_config(app);
+    let family = find_model(&config.asr_model).map(|e| e.model_family.clone());
+    match family.as_deref() {
+        Some(f) if !f.is_empty() => f.to_string(),
+        _ => "auto".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -913,14 +981,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_has_one_asr_and_three_embedding() {
-        // ASR 目录原列 3 个：960ms 因无可下载公开来源被移除，X-ASR-2026-06-03 因
-        // sherpa-onnx 1.13.6 加载崩溃被移除（见 all_models 注释），现仅剩可用的
-        // 双语模型。
+    fn manifest_has_three_asr_and_three_embedding() {
+        // v0.4 ASR 目录：paraformer（默认）+ SenseVoice（高精度）+ 2023 双语（回溯）。
+        // （X-ASR 两个模型因 1.13.6 不可加载被移除，见 all_models 注释。）
         let asr: Vec<_> = models_by_kind(ModelKind::Asr).collect();
         let emb: Vec<_> = models_by_kind(ModelKind::Embedding).collect();
-        assert_eq!(asr.len(), 1);
+        assert_eq!(asr.len(), 3);
         assert_eq!(emb.len(), 3);
+        // 每个 ASR 都带 sidecar 模型族标识
+        for e in &asr {
+            assert!(!e.model_family.is_empty(), "模型 {} 缺 model_family", e.id);
+        }
     }
 
     #[test]
@@ -942,7 +1013,7 @@ mod tests {
     fn defaults_point_to_manifest_entries() {
         let asr = default_model(ModelKind::Asr);
         let emb = default_model(ModelKind::Embedding);
-        assert_eq!(asr.id, "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20");
+        assert_eq!(asr.id, "sherpa-onnx-streaming-paraformer-bilingual-zh-en");
         assert_eq!(emb.id, "sherpa-onnx-3dspeaker-eres2netv2-base");
     }
 

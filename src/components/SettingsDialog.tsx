@@ -25,6 +25,7 @@ import AsrConfigPanel from "./AsrConfigPanel";
 import ModelCatalogPanel from "./ModelCatalogPanel";
 import LlmConfigPanel from "./LlmConfigPanel";
 import SessionHistoryPanel from "./SessionHistoryPanel";
+import { checkForUpdates } from "../updater";
 import { getVersion } from "@tauri-apps/api/app";
 import logoMark from "../../brand/logo-mark-256.png";
 
@@ -105,6 +106,24 @@ export default function SettingsDialog({
       .then(setAppVersion)
       .catch(() => setAppVersion("0.2.0"));
   }, []);
+
+  // 关于页「检查更新」（T19）：展示 checkForUpdates 返回的提示文案。
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const handleCheckUpdate = async () => {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    setUpdateMsg(null);
+    try {
+      const msg = await checkForUpdates({ manual: true });
+      setUpdateMsg(msg ?? "检查更新失败，请稍后重试。");
+    } catch (err) {
+      console.error("[updater] 手动检查失败:", err);
+      setUpdateMsg("检查更新失败，请稍后重试。");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   if (!open) return null;
 
@@ -390,6 +409,25 @@ export default function SettingsDialog({
                   <p className="settings-about-line">
                     语见 TalkSee v{appVersion}（听障实时字幕展示 MVP）。
                   </p>
+                </div>
+
+                <hr className="settings-panel-divider" />
+
+                <div className="settings-panel-section">
+                  <p className="settings-panel-section-title">更新</p>
+                  <p className="settings-panel-hint">
+                    Windows 支持应用内自动更新；macOS 安装包未签名/未公证，检查到新版本后会打开 GitHub
+                    Releases 页手动下载。
+                  </p>
+                  <button
+                    type="button"
+                    className="settings-option"
+                    onClick={handleCheckUpdate}
+                    disabled={checkingUpdate}
+                  >
+                    {checkingUpdate ? "正在检查…" : "检查更新"}
+                  </button>
+                  {updateMsg && <p className="settings-about-line">{updateMsg}</p>}
                 </div>
 
                 <hr className="settings-panel-divider" />

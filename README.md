@@ -11,7 +11,7 @@
 > 实时把周围人的话转成文字，按说话人显示为彩色气泡 + 随机头像；经 LLM 自动整理成通顺书面语，
 > 会话结束后一键生成结构化会议纪要。**MVP 已验证可行，所有功能以 Tauri 2 + Rust engine + Python sherpa-onnx 落地。**
 
-- 版本：v0.3.1
+- 版本：v0.4.0
 - 构建：[![CI](https://github.com/smallmj/talksee/actions/workflows/ci.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/ci.yml) · [![Release](https://github.com/smallmj/talksee/actions/workflows/release.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/release.yml)
 - 许可：[MIT](LICENSE) · 规格：[Issue #1](https://github.com/smallmj/talksee/issues/1)（已关闭）
 - 实现总结：`docs/T*-implementation-summary.md` · 架构决策见 `docs/adr/`
@@ -81,6 +81,8 @@
 - **托盘常驻** + **全局热键**（⌘/Ctrl+Shift+L/H/S/T）+ 单实例（重复启动唤回主窗口）
 - 首启向导：运行环境检测 + ASR / 说话人模型下载（可选国内镜像），未完成前每次启动回到向导
 - 设置中心：常规 / 模型 / LLM 整理 / 显示 / 快捷键 / 历史 / 关于，标签页分组 + 操作提示 + 持久化 + 即时生效
+- **应用内自动更新**：Windows 在设置「关于」可一键检查并自动下载安装（用户确认后重启生效）；
+  macOS 安装包未签名/未公证，检测到新版本会打开 GitHub Releases 页手动下载
 
 ---
 
@@ -178,7 +180,7 @@ TALKSEE_STANDALONE=1 pnpm tauri build     # 正式分发：打入自包含 Pytho
 2. 打 tag 并推送，CI 自动构建 macOS/Windows 安装包并创建**草稿** Release：
 
    ```bash
-   git tag v0.3.1 && git push origin v0.3.1
+   git tag v0.4.0 && git push origin v0.4.0
    ```
 
 3. 到 GitHub Releases 检查草稿、确认无误后点发布。
@@ -209,8 +211,8 @@ docs/                 ADR、Ticket 索引、各票实现总结、调研报告
 
 ## 已知边界（MVP）
 
-- 安装包未做代码签名/公证（macOS Gatekeeper 与 Windows SmartScreen 会提示，放行方式见「下载与安装」）；应用内自动更新尚未启用
+- 安装包未做代码签名/公证（macOS Gatekeeper 与 Windows SmartScreen 会提示，放行方式见「下载与安装」）；Windows 支持应用内自动更新，macOS 未签名故升级走 Releases 页手动下载
 - 仅面对面麦克风采集；不采集系统/在线会议音频；无气泡回放
-- SCD 只做切换检测 + 手动命名，不做全自动 diarization / 跨天身份持久化
-- 头像性别不按音色自动选择；无自定义滚动方式；无识别中暂停/继续（详见 Issue #1 Out of Scope）
+- SCD 只做切换检测 + 手动命名，不做全自动 diarization / 跨天身份持久化（v0.4 起按 VAD 段切句 + 头尾多窗口投票 + 后台回补聚类订正，短句/抢话场景仍有模型下限）
+- 头像性别不按音色自动选择；无识别中暂停/继续（详见 Issue #1 Out of Scope）
 - 云端 ASR 为 Deepgram 兼容协议，其他厂商需增加壳层协议适配

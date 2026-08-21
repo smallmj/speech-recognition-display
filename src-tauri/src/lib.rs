@@ -36,6 +36,55 @@ fn ping_ack(payload: String) {
     println!("[bridge] frontend acknowledged ping: {payload}");
 }
 
+/// 检查 GitHub 最新 Release（仅 macOS 使用：当前构建未签名/未公证，不走
+/// updater 插件内置下载，而是让前端弹确认框后打开 Releases 页手动下载）。
+///
+/// 返回 JSON 字符串 `{"url":"...","version":"N.N.N"}`（有新版时），
+/// 无新版本 / 无法查询时返回空字符串（前端按「已是最新」处理）。
+#[tauri::command]
+fn check_latest_release(app: tauri::AppHandle) -> Result<String, String> {
+    const API: &str = "https://api.github.com/repos/smallmj/talksee/releases/latest";
+    let resp = ureq::get(API)
+        .set("User-Agent", "talksee-updater")
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| format!("查询最新版本失败: {e}"))?;
+    let json: serde_json::Value = resp
+        .into_json()
+        .map_err(|e| format!("解析 GitHub 响应失败: {e}"))?;
+    let tag = json
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim_start_matches(['v', 'V'])
+        .to_string();
+    let url = json
+        .get("html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://github.com/smallmj/talksee/releases/latest")
+        .to_string();
+    let current = app.package_info().version.to_string();
+    if tag.is_empty() || !is_newer_version(&tag, &current) {
+        return Ok(String::new());
+    }
+    Ok(format!(r#"{{"url":"{url}","version":"{tag}"}}"#))
+}
+
+/// 逐段数字比较两个 `N.N.N` 版本号：a > b 返回 true（忽略前导 v）。
+fn is_newer_version(a: &str, b: &str) -> bool {
+    let pa: Vec<u64> = a.split('.').filter_map(|s| s.parse().ok()).collect();
+    let pb: Vec<u64> = b.split('.').filter_map(|s| s.parse().ok()).collect();
+    let len = pa.len().max(pb.len());
+    for i in 0..len {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
 pub fn run() {
     tauri::Builder::default()
         // T13 单实例：重复启动时唤起已有主窗口，避免麦克风/ASR 被多实例竞争。
@@ -43,6 +92,13 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::show_main_window(app);
         }))
+        // T19 应用内自动更新：dialog（确认弹窗）/ process（更新后重启）/
+        // opener（macOS 打开 GitHub Releases 页手动下载）。updater 仅在
+        // Windows 走完整更新流程（macOS 未签名/未公证，禁用插件内置下载）。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(pipeline::SessionControl::default());
             app.manage(asr::CorrectionState::default());
@@ -69,6 +125,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping_ack,
+            check_latest_release,
             llm::load_llm_config,
             llm::save_llm_config,
             llm::list_llm_models,

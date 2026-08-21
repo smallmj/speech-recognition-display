@@ -22,6 +22,7 @@ import {
 } from "./engineEvents";
 import { profileOf, useSpeakerProfiles, type SpeakerProfiles } from "./speakerProfiles";
 import { subscribe } from "./tauriEvent";
+import { checkForUpdates } from "./updater";
 import {
   DisplayContext,
   useDisplaySettingsState,
@@ -105,6 +106,15 @@ export default function App() {
     "idle" | "recognizing" | "stopping" | "generating" | "ready"
   >("idle");
   const [minutes, setMinutes] = useState<string | null>(null);
+
+  // T19 应用内更新：启动 5s 后自动检查一次（dev 构建在 updater.ts 内跳过），
+  // 静默失败不打断启动流程；手动检查走「设置 → 关于 → 检查更新」。
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      checkForUpdates().catch((e) => console.warn("[updater] 启动自动检查失败:", e));
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // T1 调试心跳：bridge://ping → 回执，确认 Rust→前端事件桥闭环。
   useEffect(() => {

@@ -65,11 +65,14 @@ impl SherpaAsr {
         // T5：说话人 speaker embedding 模型（3d-speaker 等）可选；缺失时 SCD 降级为单说话人。
         let embedding_dir = Self::resolve_embedding_model_dir(handle);
         let scd_configured = embedding_dir.is_some();
+        // v0.4：所选 ASR 的模型族（sidecar 据此选解码路径）+ Silero VAD（随运行时打包）。
+        let model_kind = crate::models::selected_asr_kind(handle);
         // Python/脚本路径统一走 model_paths::runtime_paths（已在内部处理
-        // Windows Scripts/python.exe vs Unix bin/python3 的平台差异）。
+        // Windows Scripts/python.exe vs Unix bin/python3 的平台差异 + VAD 模型解析）。
         let runtime = crate::model_paths::runtime_paths(handle)?;
-        let python = runtime.python;
+        let python = runtime.python.clone();
         let script = runtime.script;
+        let vad_model = runtime.vad_model;
 
         if !python.is_file() {
             return Err(format!("找不到 sidecar Python：{python:?}（先创建 src-tauri/.venv 并 pip install sherpa-onnx）"));
@@ -83,9 +86,14 @@ impl SherpaAsr {
             .arg("--model-dir")
             .arg(&model_dir)
             .arg("--sample-rate")
-            .arg("16000");
+            .arg("16000")
+            .arg("--model-kind")
+            .arg(&model_kind);
         if let Some(dir) = &embedding_dir {
             cmd.arg("--embedding-model-dir").arg(dir);
+        }
+        if let Some(vad) = &vad_model {
+            cmd.arg("--vad-model").arg(vad);
         }
         let mut child = cmd
             .stdin(Stdio::piped())
@@ -98,9 +106,13 @@ impl SherpaAsr {
             .stdin
             .take()
             .ok_or("无法取得 sidecar stdin")?;
-        // 协议首行：JSON 配置行
-        writeln!(stdin, "{{\"type\":\"config\",\"sample_rate\":16000}}")
-            .map_err(|e| format!("写 sidecar 配置行失败: {e}"))?;
+        // 协议首行：JSON 配置行（含模型族，sidecar 据此定解码路径）
+        writeln!(
+            stdin,
+            "{{\"type\":\"config\",\"sample_rate\":16000,\"model_kind\":\"{}\"}}",
+            model_kind
+        )
+        .map_err(|e| format!("写 sidecar 配置行失败: {e}"))?;
 
         let finals = Arc::new(Mutex::new(VecDeque::new()));
         let partials = Arc::new(Mutex::new(VecDeque::new()));
@@ -312,12 +324,14 @@ impl Drop for SherpaAsr {
 /// SCD 追溯修正的共享状态（Tauri 托管，跨 stdout 读线程与引擎排空线程）。
 ///
 /// - [`Self::seq_to_segment`]：`utt_seq → segment_id`，片段被追加进管线时记录；
+/// - [`Self::seq_to_speaker`]：`utt_seq → 当前说话人 id`（后台回补聚类映射用）；
 /// - [`Self::corrections`]：待解析的修正队列 `(目标 utt_seq, 新说话人 id, 性别)`，
 ///   由 stdout 读线程在 SCD 返回 [`engine::SpeakerCorrection`] 时入队，引擎排空
 ///   线程解析成 [`EngineEvent::SpeakerCorrected`] 后出队。
 #[derive(Default)]
 pub(crate) struct CorrectionState {
     pub seq_to_segment: Mutex<std::collections::HashMap<u64, u64>>,
+    pub seq_to_speaker: Mutex<std::collections::HashMap<u64, u32>>,
     pub corrections: Mutex<VecDeque<(u64, u32, Gender)>>,
 }
 
@@ -368,7 +382,12 @@ fn read_stdout(
                     Ordering::SeqCst,
                 );
                 crate::pipeline::emit_scd_status(&handle, scd_embedding.load(Ordering::SeqCst));
-                println!("[asr] sidecar 已启动: {}", obj.get("model").and_then(|v| v.as_str()).unwrap_or("?"));
+                println!(
+                    "[asr] sidecar 已启动: {} (kind={}, vad={})",
+                    obj.get("model").and_then(|v| v.as_str()).unwrap_or("?"),
+                    obj.get("model_kind").and_then(|v| v.as_str()).unwrap_or("?"),
+                    obj.get("vad").and_then(|v| v.as_bool()).unwrap_or(false),
+                );
             }
             Some("partial") => {
                 if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
@@ -412,8 +431,40 @@ fn read_stdout(
                                 .collect::<Option<Vec<f32>>>()
                                 .unwrap_or_default();
                             if !emb.is_empty() && emb.iter().all(|v| v.is_finite()) {
+                                // v0.4 多窗口：head/tail 与整段一起做投票判定
+                                // （治短句指派不稳 + mixed 边界泄漏检测）。
+                                let head = obj
+                                    .get("head_embedding")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .map(|x| x.as_f64().map(|v| v as f32))
+                                            .collect::<Option<Vec<f32>>>()
+                                    })
+                                    .unwrap_or(None)
+                                    .filter(|v| !v.is_empty() && v.iter().all(|x| x.is_finite()));
+                                let tail = obj
+                                    .get("tail_embedding")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .map(|x| x.as_f64().map(|v| v as f32))
+                                            .collect::<Option<Vec<f32>>>()
+                                    })
+                                    .unwrap_or(None)
+                                    .filter(|v| !v.is_empty() && v.iter().all(|x| x.is_finite()));
                                 let mut scd = scd.lock().unwrap();
-                                let d = scd.process_utterance(next_utt_seq, &text, &emb, speech_seconds, None);
+                                let d = scd.process_utterance_multi(
+                                    next_utt_seq,
+                                    &text,
+                                    engine::UtteranceSignals {
+                                        whole: emb,
+                                        head,
+                                        tail,
+                                        speech_seconds,
+                                        gender_hint: None,
+                                    },
+                                );
                                 utt.speaker_id = d.speaker_id;
                                 utt.is_new_speaker = Some(d.is_new_speaker);
                                 utt.gender = scd.template_gender(d.speaker_id).unwrap_or(Gender::Unknown);
@@ -429,6 +480,14 @@ fn read_stdout(
                                         q.push_back((corr.utt_token, corr.new_speaker_id, gender));
                                     }
                                 }
+                                // mixed 边界泄漏段：不更新模板（引擎内已保护），
+                                // 打日志便于排查「分不出人」问题。
+                                if d.mixed {
+                                    eprintln!(
+                                        "[asr] SCD mixed 段（疑似两说话人）：utt_seq={next_utt_seq} 归说话人 {}",
+                                        d.speaker_id
+                                    );
+                                }
                             }
                         }
                         utt.utt_seq = Some(next_utt_seq);
@@ -442,6 +501,75 @@ fn read_stdout(
                 let msg = obj.get("message").and_then(|v| v.as_str()).unwrap_or("?").to_string();
                 eprintln!("[asr] sidecar 错误: {msg}");
                 *last_error.lock().unwrap() = Some(msg);
+            }
+            Some("backfill") => {
+                // v0.4 P1 后台回补：sidecar 对近期段的 embedding 聚类后下发
+                // `{seq, cluster}` 标签。这里把「簇 → 说话人」映射定为簇内多数派
+                // 的当前说话人，然后对偏离者入修正队列（改标签不改原文）。
+                let Some(update) = obj.get("update").and_then(|v| v.as_array()) else {
+                    continue;
+                };
+                if update.is_empty() {
+                    continue;
+                }
+                let state = handle.state::<CorrectionState>();
+                let seq_to_speaker = state.seq_to_speaker.lock().unwrap();
+                // 簇 → (说话人出现次数)
+                let mut cluster_votes: std::collections::HashMap<u32, std::collections::HashMap<u32, usize>> =
+                    std::collections::HashMap::new();
+                // seq → cluster
+                let mut seq_cluster: Vec<(u64, u32)> = Vec::new();
+                for item in update {
+                    let (Some(seq), Some(cluster)) = (
+                        item.get("seq").and_then(|v| v.as_u64()),
+                        item.get("cluster").and_then(|v| v.as_u64()),
+                    ) else {
+                        continue;
+                    };
+                    let cluster = cluster as u32;
+                    seq_cluster.push((seq, cluster));
+                    if let Some(speaker) = seq_to_speaker.get(&seq) {
+                        *cluster_votes
+                            .entry(cluster)
+                            .or_default()
+                            .entry(*speaker)
+                            .or_insert(0) += 1;
+                    }
+                }
+                drop(seq_to_speaker);
+                // 每个簇的赢家说话人
+                let cluster_winner: std::collections::HashMap<u32, u32> = cluster_votes
+                    .into_iter()
+                    .filter_map(|(cluster, votes)| {
+                        let winner = votes
+                            .into_iter()
+                            .max_by_key(|(_, n)| *n)
+                            .map(|(s, _)| s)?;
+                        Some((cluster, winner))
+                    })
+                    .collect();
+                if cluster_winner.is_empty() {
+                    continue;
+                }
+                // 偏离者入修正队列（目标 seq、赢家说话人、性别）
+                let seq_to_speaker = state.seq_to_speaker.lock().unwrap();
+                let mut correctors = state.corrections.lock().unwrap();
+                let mut scd = scd.lock().unwrap();
+                for (seq, cluster) in seq_cluster {
+                    let Some(winner) = cluster_winner.get(&cluster) else {
+                        continue;
+                    };
+                    let Some(cur) = seq_to_speaker.get(&seq) else {
+                        continue;
+                    };
+                    if cur == winner {
+                        continue;
+                    }
+                    let gender = scd
+                        .template_gender(*winner)
+                        .unwrap_or(Gender::Unknown);
+                    correctors.push_back((seq, *winner, gender));
+                }
             }
             Some("stopped") => {
                 status.store(ST_STOPPED, Ordering::SeqCst);

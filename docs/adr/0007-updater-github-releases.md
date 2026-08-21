@@ -1,0 +1,6 @@
+# 客户端自动更新采用官方 tauri-plugin-updater + GitHub Releases 托管 latest.json
+
+v0.4 起加入客户端更新。选定官方 **tauri-plugin-updater**（Ed25519 签名校验 + 下载 + 安装 + 重启编排），更新清单 `latest.json` 由 **tauri-action** 在 CI 自动生成并上传到 GitHub Release，端点直接指向公开仓库的 `https://github.com/smallmj/talksee/releases/latest/download/latest.json`（302 到最新已发布 Release 的该资产，无需自建服务器）。现有 `draft: true` + 人工发布流程保持不变，天然当「更新闸门」；升级一律先弹窗用户确认，不静默安装。**平台分层**：Windows 走完整自动更新（NSIS `installMode: passive`）；**macOS 由于当前是免签名版（无 Developer ID 签名+公证），Gatekeeper 会在替换安装后拦截，故降级为「检测到新版本 → 弹窗 → 打开 Releases 页手动下载」**；待签名/公证落地后再放开 macOS 全自动。
+
+- **Considered Options**: 自建 GitHub API 手动更新（下载 NSIS `/S` 静默安装可行但自造轮子：无签名校验、无回滚、进度与重启编排都要自己实现，调研明确不建议）；完全不做更新（不满足需求）；macOS 未签名也走自动更新（Gatekeeper 拦截，不可靠）。
+- **Consequences**: 需要一次性生成 Ed25519 密钥对（`pnpm tauri signer generate`），公钥写入 `tauri.conf.json plugins.updater.pubkey`（全文，非路径），私钥只进 CI secrets（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）；`bundle.createUpdaterArtifacts: true` 与私钥缺一不可，否则 tauri build 静默不产 `.sig`；发布流程从 softprops 换成 tauri-action（自动生成 latest.json + 上传 `.tar.gz`/`.sig`/`dmg`/`exe`）；macOS 上「检查更新」走新 Rust 命令 `check_latest_release`（GitHub API 比较版本号）→ 引导下载。

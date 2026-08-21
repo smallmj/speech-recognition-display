@@ -2,7 +2,8 @@
 /**
  * 回归检查：双轨展示的用户可感知不变量。
  *
- * 1. 新片段追加后，列表容器必须自动滚动到底部；否则最新字幕在屏幕外。
+ * 1. 新片段追加后，容器级滚动保持最新字幕可见；用户上翻阅读历史时不强拽
+ *    回底部，并提供「回到最新」按钮（v0.4 契约，替代 v0.3 的 scrollIntoView 直滚）。
  * 2. LLM 整理中必须继续显示原文；最终结果到达后才切换，避免文字消失。
  * 3. 同一说话人的未整理片段必须合并成一个渲染组；批次完成后仍合并显示。
  *
@@ -17,11 +18,18 @@ import { buildRenderGroups } from "../src/components/renderGroups.ts";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const source = readFileSync(`${root}src/components/DualTrackView.tsx`, "utf8");
 
+// v0.4 滚动契约（重构自 v0.3 的 scrollIntoView 直滚）：
+// - 列表容器自身持有 ref（listRef, .dual-list 上），新内容到达时
+//   `el.scrollTop = el.scrollHeight`——容器级滚动 + Windows WebView2 兼容
+//   （scrollIntoView 会连带滚动祖先导致最新字幕落点错位，见 #4 根因）；
+// - 「接近底部才跟随」守卫：用户在底部（距离 <96px）才自动滚，上翻时暂停
+//   并出现「回到最新」按钮（.back-to-latest，死代码复活）。
 const hasAutoScroll =
-  /useRef<HTMLDivElement \| null>\(null\)/.test(source) &&
-  /scrollIntoView\(\{ block: "end", inline: "nearest" \}\)/.test(source) &&
-  /\}, \[sorted\.length\]\);/.test(source) &&
-  /<div ref=\{bottomRef\} aria-hidden \/>/.test(source);
+  /scrollTop = el\.scrollHeight/.test(source) &&
+  /const listRef = useRef<HTMLDivElement \| null>\(null\)/.test(source) &&
+  /onScroll=\{onScroll\}/.test(source) &&
+  /BOTTOM_THRESHOLD_PX = 96/.test(source) &&
+  /className="back-to-latest"/.test(source);
 const keepsRawWhileCleaning = /if \(seg\.cleaningPartial != null\) return "pending";/.test(source);
 
 function segment(id, speakerId, raw, status, cleaned = null, editId = null) {

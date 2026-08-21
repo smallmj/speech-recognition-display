@@ -20,7 +20,7 @@
  * - 原文模式：一律显示原文 `raw`。
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ENGINE_EVENT, type EngineEvent, type Segment } from "../engineEvents";
 import { subscribe } from "../tauriEvent";
 import { profileOf, useSpeakerProfiles } from "../speakerProfiles";
@@ -207,7 +207,7 @@ export default function DualTrackView({
   onIntervalChange,
 }: DualTrackViewProps) {
   const [mode, setMode] = useState<DisplayMode>("cleaned");
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const { profiles, renameSpeaker, setSpeakerAvatar, randomAvatar } = useSpeakerProfiles();
 
   const segments = useMemo(() => reduceEvents(events), [events]);
@@ -221,12 +221,47 @@ export default function DualTrackView({
   const cleanedCount = [...segments.values()].filter((s) => s.status === "cleaned").length;
   const failedCount = [...segments.values()].filter((s) => s.status === "failed").length;
 
-  // 新片段到达后跟随到底部。这里关注 sorted.length 而不是文本内容：
-  // 同一段 partial 更新不应抢夺用户滚动位置，只有新气泡出现才跟随。
-  // scrollIntoView 会同时驱动列表容器和页面级滚动，避免新字幕在屏幕外。
+  // 滚动跟随状态机（修复「最新文字没出现在屏幕里」/「上翻被拽回底部」）：
+  // - 用户处于「接近底部」区（距底部 < 96px）→ 新内容到达时自动滚到底部；
+  // - 用户主动上翻（离开底部区）→ 暂停跟随，出现「回到最新」按钮；
+  // - 「回到最新」点击后恢复跟随。
+  // 跟随目标是 .dual-list 容器自身（scrollTop=scrollHeight），而不是
+  // scrollIntoView —— scrollIntoView 在 Windows WebView2 下会同时滚动祖先
+  // 容器/页面，导致最新字幕落点错位（#4 根因）。
+  const [atBottom, setAtBottom] = useState(true);
+  const atBottomRef = useRef(true);
+  const BOTTOM_THRESHOLD_PX = 96;
+
+  const onScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nowBottom = dist <= BOTTOM_THRESHOLD_PX;
+    atBottomRef.current = nowBottom;
+    if (nowBottom !== atBottom) setAtBottom(nowBottom);
+  }, [atBottom]);
+
+  const scrollToLatest = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setAtBottom(true);
+  }, []);
+
+  // 新片段/新内容到达：仅在接近底部时跟随。不关注文本内容抖动（partial
+  // 不完整不应抢位置），只关注「片段数」与「最后一条文本长度」两个驱动量。
+  const lastSeg = sorted[sorted.length - 1];
+  const contentVersion =
+    sorted.length > 0 && lastSeg
+      ? `${sorted.length}:${lastSeg.cleaned?.length ?? lastSeg.raw.length ?? 0}`
+      : "0";
+  const contentVersionRef = useRef(contentVersion);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
-  }, [sorted.length]);
+    if (contentVersion === contentVersionRef.current) return;
+    contentVersionRef.current = contentVersion;
+    if (atBottomRef.current) scrollToLatest();
+  }, [contentVersion, scrollToLatest]);
 
   return (
     <div className="dual-track">
@@ -260,7 +295,7 @@ export default function DualTrackView({
         </div>
       </div>
 
-      <div className="dual-list">
+      <div className="dual-list" ref={listRef} onScroll={onScroll}>
         {sorted.length === 0 && (
           <div className="dual-empty">
             <p className="dual-empty-title">等待片段…</p>
@@ -311,8 +346,19 @@ export default function DualTrackView({
             </div>
           );
         })}
-        <div ref={bottomRef} aria-hidden />
       </div>
+
+      {/* 上翻后出现「回到最新」：停留在旧内容时不打扰，点击回到底部并恢复跟随 */}
+      {!atBottom && (
+        <button
+          type="button"
+          className="back-to-latest"
+          onClick={scrollToLatest}
+          title="回到最新字幕"
+        >
+          ↓ 回到最新
+        </button>
+      )}
 
       <footer className="dual-status">
         共 <strong>{sorted.length}</strong> 条 · 整理完成 <strong>{cleanedCount}</strong> 条 · 失败{" "}

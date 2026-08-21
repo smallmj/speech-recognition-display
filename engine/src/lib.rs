@@ -31,7 +31,9 @@ pub use minutes::{
     chunk_for_summarize, summarize_minutes, BATCH_MAX_CHARS, MAX_TOKENS, ROLLING_CONTEXT_CHARS,
 };
 pub use pipeline::{speaker_color, Engine, MockAsrPort, SPEAKER_PALETTE};
-pub use scd::{cosine_similarity, Scd, ScdConfig, SpeakerDecision, SpeakerTemplate};
+pub use scd::{
+    cosine_similarity, Scd, ScdConfig, SpeakerDecision, SpeakerTemplate, UtteranceSignals,
+};
 pub use types::{
     AsrPort, EmbeddingPort, EngineEvent, Gender, LlmPort, Segment, SegmentStatus, Utterance,
 };

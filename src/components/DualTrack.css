@@ -5,6 +5,8 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* 「回到最新」浮动按钮的定位锚点 */
+  position: relative;
 }
 
 .dual-toolbar {
@@ -78,7 +80,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 24px 12px;
+  /* 底部大留白：最新字幕滚动到底后不贴屏幕最底边，给下方留出呼吸空间 */
+  padding: 16px 24px 96px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -341,12 +344,18 @@
 }
 
 :root[data-focus-mode="true"] .dual-text {
-  font-size: calc(var(--bubble-font-size, 15px) * 1.8);
+  /* 大字模式：字号 1.8× → 2.2×，更易远距离阅读 */
+  font-size: calc(var(--bubble-font-size, 15px) * 2.2);
   line-height: 1.7;
   padding: 14px 20px;
 }
 
 :root[data-focus-mode="true"] .dual-list {
-  padding: 24px 32px 16px;
+  padding: 24px 32px 120px;
   gap: 20px;
+}
+
+/* 大字模式：回到最新按钮避开底部大留白，位置更靠上一点 */
+:root[data-focus-mode="true"] .back-to-latest {
+  bottom: 72px;
 }

@@ -9,6 +9,10 @@
     "core:window:allow-set-always-on-top",
     "core:tray:default",
     "core:app:default",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "updater:default",
+    "dialog:default",
+    "process:default",
+    "opener:default"
   ]
 }

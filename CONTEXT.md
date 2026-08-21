@@ -35,14 +35,38 @@ _Avoid_: 会议（指真实的线下会议，易混淆）、录制
 _Avoid_: 摘要（指更短的总结）
 
 **说话人切换检测 (Speaker Change Detection, SCD)**:
-实时判断相邻两段发言是否来自同一说话人的机制，基于声纹向量余弦匹配。
+实时判断相邻两段发言是否来自同一说话人的机制，基于 speaker embedding（说话人向量）余弦匹配 + 说话人模板状态机。
 _Avoid_: 说话人分离、声纹识别（分别指全自动聚类与身份识别，属不同能力）
+
+**语段 (VAD Segment)**:
+由 VAD（语音活动检测，silero）切出的连续语音单元；是转写、说话人 embedding 与气泡的统一边界单位（v0.4 起）。
+_Avoid_: 句子（与语法句/转写 final 混淆——VAD 段按静音切，不以标点论）
+
+**说话人模板 (Speaker Template)**:
+SCD 为每位说话人维护的参考向量（可多条/移动平均），用于把新语段的 embedding 归入已有说话人。
+_Avoid_: 声纹档案（暗示身份识别）
+
+**边界泄漏 (Boundary Leak)**:
+上一说话人语段的 end boundary 滞后，下一说话人的开头被并进上一条 final 的现象（v0.4 以 VAD 切片 + 拆句自愈消除）。
+_Avoid_: 串词（未指明是边界问题）、粘句
+
+**回补订正 (Backfill Correction)**:
+会话进行中，对近期语段的 embedding 做离线聚类，把与当前归属不一致的语段改归到多数派说话人的后台订正（UI 表现为追溯修正）。
+_Avoid_: 事后重排、重新分组
 
 ### 配置
 
 **本地 ASR / 云端 ASR (Local / Cloud ASR)**:
 两种可切换的语音识别来源：本地离线运行，云端经网络调用。同一抽象接口，设置中可切换。
 _Avoid_: 引擎（单独使用时歧义）
+
+**ASR 模型族 (ASR Model Family)**:
+本地 ASR 的解码结构类别，决定 sidecar 走哪条加载路径：transducer（zipformer）/ paraformer / sense-voice（离线高精度）。由所选模型的 manifest 标注。
+_Avoid_: 引擎类型、识别后端
+
+**高精度模式 (High-accuracy Mode)**:
+选用 SenseVoice 模型时的识别形态：VAD 按句切、逐句离线识别，带 ITN（数字归一）与标点，准确率最高但每句有整句延迟（2–4s）。
+_Avoid_: 精转写、增强模式（语义含糊）
 
 **整理间隔 (Cleanup Interval)**:
 把已冻结原文片段送去 LLM 整理的周期，设置中可选（建议 5s/10s 档位）。

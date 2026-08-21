@@ -111,6 +111,13 @@ pub struct SpeakerDecision {
     /// `utt_token`）改归到新说话人。调用方需把 `utt_token` 与最终片段 id
     /// 对应起来并发出修正事件。
     pub corrections: Vec<SpeakerCorrection>,
+    /// 句内疑似混入两说话人（头尾窗口各自信地归到不同说话人）。
+    ///
+    /// 边界泄漏段（下一人的开头被并进上一人的 final）的 embedding 是「混合
+    /// 向量」，谁也不像——这里标记后，调用方**不要用该 embedding 更新模板**
+    /// （避免脏向量污染说话人模板，详见 [`Scd::update_template`] 的调用规则），
+    /// 归属按「头窗口」的说话人（时序靠前者）落定。
+    pub mixed: bool,
 }
 
 /// 一条追溯修正：目标 utterance（由调用方持有的 `utt_token` 标识）应改归
@@ -119,6 +126,26 @@ pub struct SpeakerDecision {
 pub struct SpeakerCorrection {
     pub utt_token: u64,
     pub new_speaker_id: u32,
+}
+
+/// 一条 final 的说话人判定信号（多窗口 embedding）。
+///
+/// - `whole`：整段有效语音的 embedding（现状，必填）；
+/// - `head_window_seconds` / `tail_window_seconds`：头/尾窗口长度（默认 1.0s）。
+///   若 sidecar 只上报整段 embedding（降级/旧 sidecar），head/tail 为 `None`，
+///   判定退化为现有「单窗口」逻辑（行为与 v0.3 完全一致）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct UtteranceSignals {
+    /// 整段有效语音（裁尾部静音后）的 speaker embedding。
+    pub whole: Vec<f32>,
+    /// 句首窗口的 speaker embedding（前 ~1.0s）。
+    pub head: Option<Vec<f32>>,
+    /// 句尾窗口的 speaker embedding（后 ~1.0s，裁静音后取）。
+    pub tail: Option<Vec<f32>>,
+    /// 该段音频**有效语音**时长（秒，裁静音后），由 sidecar 上报。
+    pub speech_seconds: f32,
+    /// sidecar 上报或用户手动指定的性别。
+    pub gender_hint: Option<Gender>,
 }
 
 /// 说话人切换检测器：模板注册表 + 三段式判定状态机。
@@ -191,23 +218,10 @@ impl Scd {
         speech_seconds >= self.config.min_speech_seconds
     }
 
-    /// 判定一条 final 归属的完整入口。
+    /// 判定一条 final 归属的完整入口（单窗口版，兼容既有调用方/测试）。
     ///
-    /// 参数：
-    /// - `utt_token`：调用方为这条 final 分配的唯一序号；当这条 final 作为
-    ///   pending 候选被后续片段确认新建时，会通过 [`SpeakerCorrection`] 引用它。
-    /// - `text`：转写文本。
-    /// - `embedding`：该段音频的 speaker embedding。
-    /// - `speech_seconds`：该段音频**有效语音**时长（秒，裁静音后），由 sidecar 上报。
-    /// - `gender_hint`：sidecar 上报或用户手动指定的性别。
-    ///
-    /// 三段式判定：
-    /// 1. 无信号（过短文本 / 空·全零·NaN embedding / 有效语音 < 时长门槛）
-    ///    → 沿用最近说话人（首个归说话人 1），**绝不新建**；
-    /// 2. 有信号 → 与所有模板余弦匹配：top1 ≥ 该时长档阈值且满足相对 margin
-    ///    → 归入该说话人；top1 < 新建阈值 → 新说话人候选（长段直接新建 /
-    ///    短段进入 pending 待印证）；
-    /// 3. 其余（阈值与新建阈值之间的模糊带）→ 沿用最近说话人。
+    /// 等价于 [`Self::process_utterance_multi`] 且 head/tail 为 `None`（行为与
+    /// v0.3 完全一致）。
     pub fn process_utterance(
         &mut self,
         utt_token: u64,
@@ -216,10 +230,43 @@ impl Scd {
         speech_seconds: f32,
         gender_hint: Option<Gender>,
     ) -> SpeakerDecision {
+        self.process_utterance_multi(
+            utt_token,
+            text,
+            UtteranceSignals {
+                whole: embedding.to_vec(),
+                head: None,
+                tail: None,
+                speech_seconds,
+                gender_hint,
+            },
+        )
+    }
+
+    /// 判定一条 final 归属的完整入口（多窗口版）。
+    ///
+    /// 三段式判定（对齐单窗口版）之外，多窗口信号额外提供两层增强：
+    /// 1. **头/尾窗口投票**：head / tail 与现有模板匹配，多数窗口一致的说话人
+    ///    优先采纳（治短句指派不稳，实测短窗相对信号仍有效）；
+    /// 2. **边界泄漏检测**：head 归 A、tail 归 B 且都自信 → 判定该段混入两
+    ///    说话人（`mixed: true`），**不更新模板**（混合向量会污染模板——这是
+    ///    「第二人开头挂进前一人末尾」泄漏的残留防御；主防御在 sidecar 的
+    ///    VAD 切句 + 拆句）。归属按 head（时序靠前者）落定。
+    ///
+    /// 无 head/tail（降级/旧 sidecar）时退化为单窗口逻辑，行为与 v0.3 一致。
+    pub fn process_utterance_multi(
+        &mut self,
+        utt_token: u64,
+        text: &str,
+        signals: UtteranceSignals,
+    ) -> SpeakerDecision {
+        let speech_seconds = signals.speech_seconds;
+        let gender_hint = signals.gender_hint;
+
         // 1. 无信号兜底：沿用最近说话人，绝不新建（噪声保护）。
         if !self.is_meaningful_speech(text)
             || !self.is_meaningful_duration(speech_seconds)
-            || Self::is_empty_signal(embedding)
+            || Self::is_empty_signal(&signals.whole)
         {
             return self.resolve_no_embedding();
         }
@@ -227,6 +274,111 @@ impl Scd {
         // 每条有信号的发言都让 pending 候选存活计数 +1（超限后作废）。
         self.age_pending();
 
+        // 阈值按整段有效语音时长分档；头/尾窗口固定用短窗阈值（窗口 ~1s，
+        // 同人余弦天然低于长段，套长段阈值会误杀合法匹配）。
+        let whole_threshold = if speech_seconds >= self.config.long_seconds {
+            self.config.match_threshold_long
+        } else {
+            self.config.match_threshold_short
+        };
+        let window_threshold = self.config.match_threshold_short;
+
+        // 首个有效发言：种子说话人 1（需要第一个锚点）。
+        if self.templates.is_empty() {
+            let id = self.next_speaker_id;
+            self.next_speaker_id += 1;
+            let gender = match gender_hint {
+                Some(g) if g != Gender::Unknown => g,
+                _ => self.infer_gender(&signals.whole),
+            };
+            self.templates.push(SpeakerTemplate {
+                id,
+                embedding: signals.whole.clone(),
+                gender,
+                update_count: 1,
+            });
+            self.last_speaker_id = Some(id);
+            self.pending_candidate = None;
+            return SpeakerDecision {
+                speaker_id: id,
+                is_new_speaker: true,
+                corrections: Vec::new(),
+                mixed: false,
+            };
+        }
+
+        // 各窗口对现有模板的自信匹配（top1 达标 + 相对 margin）。
+        let whole_match = self.window_match(&signals.whole, whole_threshold);
+        let head_match = signals
+            .head
+            .as_deref()
+            .and_then(|e| self.window_match(e, window_threshold));
+        let tail_match = signals
+            .tail
+            .as_deref()
+            .and_then(|e| self.window_match(e, window_threshold));
+
+        // 2. 边界泄漏检测：head 与 tail 各自信地归到不同说话人 → 混合段。
+        //    不更新模板（脏向量），归属按 head（时序靠前者），等待 sidecar
+        //    拆句后的干净段走正常判定。
+        if let (Some((head_id, _)), Some((tail_id, _))) = (head_match, tail_match) {
+            if head_id != tail_id {
+                self.last_speaker_id = Some(head_id);
+                return SpeakerDecision {
+                    speaker_id: head_id,
+                    is_new_speaker: false,
+                    corrections: Vec::new(),
+                    mixed: true,
+                };
+            }
+        }
+
+        // 3. 多窗口投票：多数窗口一致采纳（head/tail/whole 三选二及以上）。
+        let mut votes = Vec::with_capacity(3);
+        if let Some((id, _)) = whole_match {
+            votes.push(id);
+        }
+        if let Some((id, _)) = head_match {
+            votes.push(id);
+        }
+        if let Some((id, _)) = tail_match {
+            votes.push(id);
+        }
+        let majority = majority_id(&votes);
+        if let Some(id) = majority {
+            // 注意：模板更新用整段 whole（干净信号），head/tail 只负责投票归属。
+            if let Some(hint) = gender_hint {
+                if hint != Gender::Unknown {
+                    if let Some(t) = self.templates.iter_mut().find(|t| t.id == id) {
+                        if t.gender == Gender::Unknown {
+                            t.gender = hint;
+                        }
+                    }
+                }
+            }
+            self.update_template(id, &signals.whole);
+            self.last_speaker_id = Some(id);
+            return SpeakerDecision {
+                speaker_id: id,
+                is_new_speaker: false,
+                corrections: Vec::new(),
+                mixed: false,
+            };
+        }
+
+        // 4. 无多数/无匹配 → 既有单窗口判定（新建 / 印证 / 模糊带）。
+        self.decide_single_window(utt_token, &signals.whole, speech_seconds, gender_hint)
+    }
+
+    /// 单窗口核心判定：对整段 embedding 走三段式（归入现有 / 新建候选 /
+    /// 模糊带沿用）。多窗口版在无多数时回退到这里。
+    fn decide_single_window(
+        &mut self,
+        utt_token: u64,
+        embedding: &[f32],
+        speech_seconds: f32,
+        gender_hint: Option<Gender>,
+    ) -> SpeakerDecision {
         let sims: Vec<(f32, u32)> = self
             .templates
             .iter()
@@ -253,6 +405,7 @@ impl Scd {
                 speaker_id: id,
                 is_new_speaker: true,
                 corrections: Vec::new(),
+                mixed: false,
             };
         }
 
@@ -293,6 +446,7 @@ impl Scd {
                 speaker_id: top1_id,
                 is_new_speaker: false,
                 corrections: Vec::new(),
+                mixed: false,
             };
         }
 
@@ -318,6 +472,7 @@ impl Scd {
                     speaker_id: id,
                     is_new_speaker: true,
                     corrections: Vec::new(),
+                    mixed: false,
                 };
             }
 
@@ -348,6 +503,7 @@ impl Scd {
                             utt_token: pend_token,
                             new_speaker_id: id,
                         }],
+                        mixed: false,
                     };
                 }
             }
@@ -358,6 +514,7 @@ impl Scd {
                 speaker_id: id,
                 is_new_speaker: false,
                 corrections: Vec::new(),
+                mixed: false,
             };
         }
 
@@ -368,6 +525,29 @@ impl Scd {
             speaker_id: id,
             is_new_speaker: false,
             corrections: Vec::new(),
+            mixed: false,
+        }
+    }
+
+    /// 对现有模板的「自信匹配」：top1 达标且满足相对 margin 时返回
+    /// `(speaker_id, top1 余弦)`；否则 `None`（可能新建 / 模糊，交给决策层）。
+    fn window_match(&self, emb: &[f32], threshold: f32) -> Option<(u32, f32)> {
+        if self.templates.is_empty() {
+            return None;
+        }
+        let mut votes: Vec<(f32, u32)> = self
+            .templates
+            .iter()
+            .map(|t| (cosine_similarity(emb, &t.embedding), t.id))
+            .collect();
+        votes.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let (top1, top1_id) = votes[0];
+        let top2 = votes.get(1).map(|(s, _)| *s).unwrap_or(f32::MIN);
+        let margin_ok = self.templates.len() == 1 || top1 - top2 >= self.config.match_margin;
+        if top1 >= threshold && margin_ok {
+            Some((top1_id, top1))
+        } else {
+            None
         }
     }
 
@@ -414,6 +594,7 @@ impl Scd {
             speaker_id: id,
             is_new_speaker: false,
             corrections: Vec::new(),
+            mixed: false,
         }
     }
 
@@ -424,6 +605,28 @@ impl Scd {
             || embedding.iter().any(|x| x.is_nan())
             || embedding.iter().all(|x| *x == 0.0)
     }
+}
+
+/// 多窗口投票的多数判定：出现次数最多的说话人 id；无多数（全部不重复）
+/// 返回 `None`。
+fn majority_id(votes: &[u32]) -> Option<u32> {
+    if votes.is_empty() {
+        return None;
+    }
+    let mut counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for id in votes {
+        *counts.entry(*id).or_insert(0) += 1;
+    }
+    let mut best: Option<(u32, usize)> = None;
+    for (&id, &c) in &counts {
+        match best {
+            Some((_, bc)) if c > bc => best = Some((id, c)),
+            Some(_) => {}
+            None => best = Some((id, c)),
+        }
+    }
+    let (id, c) = best?;
+    if c >= 2 { Some(id) } else { None }
 }
 
 /// 两个向量的余弦相似度：`a·b / (|a|·|b|)`，值域 [-1, 1]。
@@ -712,5 +915,121 @@ mod tests {
     fn infer_gender_degrades_to_unknown_without_model() {
         let scd = Scd::new(config());
         assert_eq!(scd.infer_gender(&emb_a()), Gender::Unknown);
+    }
+
+    // ---- 验收：多窗口投票（head/tail/whole）----
+
+    fn signals(
+        whole: Vec<f32>,
+        head: Option<Vec<f32>>,
+        tail: Option<Vec<f32>>,
+        speech_seconds: f32,
+    ) -> UtteranceSignals {
+        UtteranceSignals {
+            whole,
+            head,
+            tail,
+            speech_seconds,
+            gender_hint: None,
+        }
+    }
+
+    /// 头尾窗口与整段都指向同一人（干净长句）：投票采纳，归入现有说话人。
+    #[test]
+    fn multi_window_unanimous_vote_counts_to_existing_speaker() {
+        let mut scd = Scd::new(config());
+        scd.process_utterance(1, "第一句", &emb_a(), DUR_LONG, None);
+
+        // 同一人：whole/head/tail 都接近 emb_a
+        let d = scd.process_utterance_multi(
+            2,
+            "第二句是同一人的长句",
+            signals(emb_a(), Some(emb_a()), Some(emb_a()), DUR_LONG),
+        );
+        assert_eq!((d.speaker_id, d.is_new_speaker, d.mixed), (1, false, false));
+        assert_eq!(scd.speaker_count(), 1, "同一人不应新建说话人");
+    }
+
+    /// 三窗口一致远离所有模板且长段：走既有新建逻辑（单窗口语义保持）。
+    #[test]
+    fn multi_window_far_from_all_creates_new_speaker() {
+        let mut scd = Scd::new(config());
+        scd.process_utterance(1, "第一句", &emb_a(), DUR_LONG, None);
+
+        let d = scd.process_utterance_multi(
+            2,
+            "另一位说话人",
+            signals(emb_b(), Some(emb_b()), Some(emb_b()), DUR_LONG),
+        );
+        assert_eq!((d.speaker_id, d.is_new_speaker), (2, true));
+        assert_eq!(d.mixed, false);
+    }
+
+    /// 边界泄漏（头归 A、尾归 B 且都自信）：标记 mixed，归属 head（A），
+    /// 且**不更新模板**——混合向量不得污染说话人模板。
+    #[test]
+    fn head_tail_disagreement_marks_mixed_and_keeps_template_clean() {
+        let mut scd = Scd::new(config());
+        scd.process_utterance(1, "A 的第一句", &emb_a(), DUR_LONG, None);
+        scd.process_utterance(2, "B 的第一句", &emb_b(), DUR_LONG, None);
+
+        // 泄漏段：开头是 A、结尾是 B，整段 embedding 是混合的（谁也不像）
+        let mixed = vec![0.5, 0.5, 0.0]; // 靠 A 一点，避免触发新建
+        let d = scd.process_utterance_multi(
+            3,
+            "A 的尾巴被并进 B 的开头",
+            signals(mixed.clone(), Some(emb_a()), Some(emb_b()), DUR_LONG),
+        );
+        // head（A）与 tail（B）各自信归不同人 → mixed=true，归属 head=A
+        assert_eq!((d.speaker_id, d.mixed), (1, true));
+        assert_eq!(scd.speaker_count(), 2, "混合段绝不新建说话人");
+        // 模板未被混合向量污染：A 的模板更新计数不变（仍 1 条发言并入）
+        let ta = scd.templates().iter().find(|t| t.id == 1).unwrap();
+        assert_eq!(ta.update_count, 1, "混合段不更新模板");
+    }
+
+    /// 头尾多数投票在短段上救回指派：head+tail 都匹配 B，即使 whole 偏向 A。
+    #[test]
+    fn head_tail_majority_overrides_fuzzy_whole() {
+        let mut scd = Scd::new(config());
+        scd.process_utterance(1, "A 的第一句", &emb_a(), DUR_LONG, None);
+        scd.process_utterance(2, "B 的第一句", &emb_b(), DUR_LONG, None);
+
+        // whole 模糊（0.6/0.6 都不达标 margin），但 head+tail 都明确归 B
+        let fuzzy_whole = vec![0.6, 0.6, 0.0];
+        let d = scd.process_utterance_multi(
+            3,
+            "短句",
+            signals(fuzzy_whole, Some(emb_b()), Some(emb_b()), DUR_LONG),
+        );
+        assert_eq!(d.speaker_id, 2, "head+tail 多数投票应归 B（覆盖模糊 whole）");
+        assert!(!d.is_new_speaker);
+        assert!(!d.mixed);
+    }
+
+    /// 无 head/tail（降级 sidecar）：process_utterance_multi 行为与单窗口一致。
+    #[test]
+    fn multi_window_without_head_tail_matches_single_window() {
+        let mut scd = Scd::new(config());
+        scd.process_utterance(1, "第一句", &emb_a(), DUR_LONG, None);
+        let d = scd.process_utterance_multi(
+            2,
+            "第二句",
+            signals(emb_a(), None, None, DUR_LONG),
+        );
+        assert_eq!(d.speaker_id, 1);
+        assert_eq!(d.mixed, false);
+    }
+
+    // ---- 验收：majority_id 纯函数 ----
+
+    #[test]
+    fn majority_id_basics() {
+        assert_eq!(majority_id(&[]), None);
+        assert_eq!(majority_id(&[1]), None, "单票不构成多数");
+        assert_eq!(majority_id(&[1, 2]), None, "两票不同无多数");
+        assert_eq!(majority_id(&[1, 1]), Some(1));
+        assert_eq!(majority_id(&[1, 2, 1]), Some(1));
+        assert_eq!(majority_id(&[1, 2, 3, 2, 2]), Some(2));
     }
 }

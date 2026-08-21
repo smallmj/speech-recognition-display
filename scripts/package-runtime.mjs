@@ -23,6 +23,9 @@ const devVenv = path.join(root, "src-tauri", ".venv");
 const devScript = path.join(root, "src-tauri", "sherpa_streaming.py");
 const runtimeDir = path.join(root, "src-tauri", "resources", "runtime");
 const venvTarget = path.join(runtimeDir, "venv");
+// v0.4：Silero VAD 模型（固定运行时资产，非用户可选模型）。开发模式放
+// `src-tauri/asr-models/silero_vad/`，打包时复制进 runtime 目录随包分发。
+const devVadModel = path.join(root, "src-tauri", "asr-models", "silero_vad", "silero_vad.onnx");
 
 // —— 自包含 Python（python-build-standalone）固定版本 ——
 // 该 release 对 aarch64/x86_64-apple-darwin 与 x86_64-pc-windows-msvc 均提供
@@ -60,6 +63,12 @@ function copyScript() {
     process.exit(1);
   }
   cpSync(devScript, path.join(runtimeDir, "sherpa_streaming.py"));
+  // v0.4：Silero VAD 随运行时打包（固定资产，随包分发；缺失仅影响 VAD 切片 → 降级为端点定稿）
+  if (existsSync(devVadModel)) {
+    cpSync(devVadModel, path.join(runtimeDir, "silero_vad.onnx"));
+  } else {
+    console.warn(`!! 未找到 VAD 模型（${devVadModel}），打包版将降级为 ASR 端点定稿`);
+  }
 }
 
 /** 幂等判断：目标 venv 是自包含构建（带标记）且能导入 sherpa_onnx / numpy。 */

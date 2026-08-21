@@ -693,14 +693,20 @@ fn append_utterance(
 ) {
     let evt = pipeline.append(now, utt.speaker_id, utt.text.clone());
     if let EngineEvent::SegmentAppended { segment } = &evt {
-        // 记录 utt_seq → segment_id，供 SCD 追溯修正解析。
+        // 记录 utt_seq → segment_id 与 → 当前说话人 id，供 SCD 追溯修正
+        // （证据确认）与后台回补聚类（backfill）映射使用。
         if let Some(seq) = utt.utt_seq {
-            handle
-                .state::<crate::asr::CorrectionState>()
+            let state = handle.state::<crate::asr::CorrectionState>();
+            state
                 .seq_to_segment
                 .lock()
                 .unwrap()
                 .insert(seq, segment.id);
+            state
+                .seq_to_speaker
+                .lock()
+                .unwrap()
+                .insert(seq, segment.speaker_id);
         }
         if !known_speakers.contains(&segment.speaker_id) {
             known_speakers.push(segment.speaker_id);
@@ -731,12 +737,16 @@ fn flush_corrections(handle: &AppHandle, known_speakers: &mut Vec<u32>) {
         return;
     }
     let seq_to_segment = state.seq_to_segment.lock().unwrap();
+    let mut seq_to_speaker = state.seq_to_speaker.lock().unwrap();
     let mut remaining = std::collections::VecDeque::new();
     while let Some((target_seq, new_speaker_id, gender)) = corrections.pop_front() {
         let Some(&segment_id) = seq_to_segment.get(&target_seq) else {
             remaining.push_back((target_seq, new_speaker_id, gender));
             continue;
         };
+        // 已消费的修正：同步说话人映射并清理（防长期会话内存增长；backfill
+        // 只关心近端段的映射）。
+        seq_to_speaker.insert(target_seq, new_speaker_id);
         let is_new = !known_speakers.contains(&new_speaker_id);
         if is_new {
             known_speakers.push(new_speaker_id);
@@ -753,6 +763,16 @@ fn flush_corrections(handle: &AppHandle, known_speakers: &mut Vec<u32>) {
         );
     }
     *corrections = remaining;
+    // 防长期会话内存增长：seq_to_speaker 只保留最近 256 条（backfill 窗口仅 40）。
+    const KEEP_SEQ_SPEAKER: usize = 256;
+    if seq_to_speaker.len() > KEEP_SEQ_SPEAKER {
+        let mut keys: Vec<u64> = seq_to_speaker.keys().copied().collect();
+        keys.sort_unstable();
+        let drop_at = keys.len() - KEEP_SEQ_SPEAKER;
+        for key in keys.into_iter().take(drop_at) {
+            seq_to_speaker.remove(&key);
+        }
+    }
 }
 
 /// emit 一条 engine 事件（打印 + 推送给前端）。

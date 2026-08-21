@@ -18,6 +18,12 @@ src-tauri/asr-models/
 src-tauri/resources/runtime/venv/
 src-tauri/resources/runtime/sherpa_streaming.py
 
+# 更新签名私钥：生成于 ~/.tauri/talksee.key（仓库外），绝不可提交。
+# 若私钥被误复制进仓库，*.key / *.pub 通配可阻止误提交。
+*.key
+*.pub
+~/.tauri/
+
 # 系统文件
 .DS_Store
 
