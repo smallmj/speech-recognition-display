@@ -175,40 +175,22 @@ fn entry(
 
 /// 内置模型目录。数据源：2026-08 实测（见 issue #27）。
 ///
-/// 说明：规格（issue #27）原列 3 个 ASR；`sherpa-onnx-x-asr-960ms-...-2026-06-05`
-/// 的 sherpa-onnx int8 导出文件经核实**没有公开可下载来源**（HuggingFace 各 org、
-/// GitHub 均无此精确产物；本地 README 指向的 `Gilgamesh-J/X-ASR` GitHub 仓库只有
-/// 不同格式的 `encoder-960ms.onnx` 等原生 ONNX，缺 `bpe.model`，sidecar 无法可靠
-/// 加载），故从可下载目录中移除，避免「能下载但识别不可用」。本地已有该目录的开发
-/// /CI 场景仍可用 `SHERPA_MODEL_DIR` 环境变量覆盖（见 `asr.rs`）。
+/// 说明：规格（issue #27）原列 3 个 ASR，其中两个 X-ASR 系列模型均已移除，
+/// 避免「能下载但识别不可用」：
+/// - `sherpa-onnx-x-asr-960ms-...-2026-06-05`：int8 导出文件经核实**没有公开可下载
+///   来源**（HuggingFace 各 org、GitHub 均无此精确产物；本地 README 指向的
+///   `Gilgamesh-J/X-ASR` GitHub 仓库只有不同格式的 `encoder-960ms.onnx` 等原生
+///   ONNX，缺 `bpe.model`，sidecar 无法可靠加载）。
+/// - `sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03`：模型文件
+///   齐全且可下载，但 sherpa-onnx 1.13.6 加载时**直接崩溃**（ONNX 缺少
+///   `encoder_dims` 元数据，`online-zipformer2-transducer-model.cc:InitEncoder`
+///   报错后 segfault，sidecar 无任何输出也无 error 事件 → 表现为「点了开始识别却
+///   一个字都没有」）。该导出基于更新版的 sherpa-onnx，需等新版运行时再考虑加回。
+/// 本地已有上述目录的开发/CI 场景仍可用 `SHERPA_MODEL_DIR` 环境变量覆盖（见 `asr.rs`）。
 pub fn all_models() -> &'static [ModelEntry] {
     static MODELS: OnceLock<Vec<ModelEntry>> = OnceLock::new();
     MODELS.get_or_init(|| vec![
         // ---- ASR（sherpa-onnx 流式转写）----
-        entry(
-            "sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03",
-            ModelKind::Asr,
-            "zipformer 中英标点（2026-06-03）",
-            "csukuangfj2/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03",
-            "sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03",
-            &[
-                "encoder-epoch-99-avg-1.int8.onnx",
-                "decoder-epoch-99-avg-1.onnx",
-                "joiner-epoch-99-avg-1.int8.onnx",
-                "bpe.model",
-                "tokens.txt",
-            ],
-            175_813_027,
-            true,
-            desc(
-                "中文为主，中英混合，含标点",
-                "标准流式（边说边出字），低延迟",
-                "双核 CPU + 4GB 内存即可；2 线程推理",
-                "Apache-2.0（以官方模型卡为准）",
-                "macOS / Windows（纯 CPU，无需 GPU）",
-                "2026-06 新版，识别质量与标点完善，默认推荐",
-            ),
-        ),
         entry(
             "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
             ModelKind::Asr,
@@ -223,14 +205,14 @@ pub fn all_models() -> &'static [ModelEntry] {
                 "tokens.txt",
             ],
             199_301_041,
-            false,
+            true,
             desc(
                 "中英双语",
                 "流式（边说边出字）",
                 "双核 CPU + 4GB 内存即可；2 线程推理",
                 "Apache-2.0",
                 "macOS / Windows（纯 CPU，无需 GPU）",
-                "较早期模型（2023），文件略大，作为备选",
+                "已验证与 sherpa-onnx 1.13.6 兼容的默认模型（2023 版），文件略大",
             ),
         ),
         // ---- 说话人 speaker embedding（T5 SCD，可选）----
@@ -931,11 +913,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_has_two_asr_and_three_embedding() {
-        // ASR 目录原列 3 个，960ms 因无可下载公开来源被移除（见 all_models 注释）。
+    fn manifest_has_one_asr_and_three_embedding() {
+        // ASR 目录原列 3 个：960ms 因无可下载公开来源被移除，X-ASR-2026-06-03 因
+        // sherpa-onnx 1.13.6 加载崩溃被移除（见 all_models 注释），现仅剩可用的
+        // 双语模型。
         let asr: Vec<_> = models_by_kind(ModelKind::Asr).collect();
         let emb: Vec<_> = models_by_kind(ModelKind::Embedding).collect();
-        assert_eq!(asr.len(), 2);
+        assert_eq!(asr.len(), 1);
         assert_eq!(emb.len(), 3);
     }
 
@@ -958,7 +942,7 @@ mod tests {
     fn defaults_point_to_manifest_entries() {
         let asr = default_model(ModelKind::Asr);
         let emb = default_model(ModelKind::Embedding);
-        assert_eq!(asr.id, "sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03");
+        assert_eq!(asr.id, "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20");
         assert_eq!(emb.id, "sherpa-onnx-3dspeaker-eres2netv2-base");
     }
 
@@ -1053,26 +1037,27 @@ mod tests {
 
     #[test]
     fn prefer_downloaded_picks_present_model_over_default() {
+        // ASR 类现仅剩默认模型一个，改用 Embedding 类（3 个，含非默认项）验证迁移逻辑。
         let root = std::env::temp_dir().join(format!("models-prefer-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        let default_asr = default_model(ModelKind::Asr);
-        let alt_asr = models_by_kind(ModelKind::Asr)
+        let default_emb = default_model(ModelKind::Embedding);
+        let alt_emb = models_by_kind(ModelKind::Embedding)
             .find(|e| !e.default)
             .unwrap();
-        fs::create_dir_all(root.join(&alt_asr.dir_name)).unwrap();
-        for f in &alt_asr.files {
-            fs::write(root.join(&alt_asr.dir_name).join(f), vec![1u8; 8]).unwrap();
+        fs::create_dir_all(root.join(&alt_emb.dir_name)).unwrap();
+        for f in &alt_emb.files {
+            fs::write(root.join(&alt_emb.dir_name).join(f), vec![1u8; 8]).unwrap();
         }
         // 默认未下载、备选已下载 → 优先备选。
-        let chosen = prefer_downloaded(ModelKind::Asr, &default_asr.id, &root);
-        assert_eq!(chosen, alt_asr.id);
+        let chosen = prefer_downloaded(ModelKind::Embedding, &default_emb.id, &root);
+        assert_eq!(chosen, alt_emb.id);
         // 默认已下载 → 保持默认。
-        fs::create_dir_all(root.join(&default_asr.dir_name)).unwrap();
-        for f in &default_asr.files {
-            fs::write(root.join(&default_asr.dir_name).join(f), vec![1u8; 8]).unwrap();
+        fs::create_dir_all(root.join(&default_emb.dir_name)).unwrap();
+        for f in &default_emb.files {
+            fs::write(root.join(&default_emb.dir_name).join(f), vec![1u8; 8]).unwrap();
         }
-        let chosen = prefer_downloaded(ModelKind::Asr, &default_asr.id, &root);
-        assert_eq!(chosen, default_asr.id);
+        let chosen = prefer_downloaded(ModelKind::Embedding, &default_emb.id, &root);
+        assert_eq!(chosen, default_emb.id);
         let _ = fs::remove_dir_all(&root);
     }
 
