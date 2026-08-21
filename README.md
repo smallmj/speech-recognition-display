@@ -9,7 +9,7 @@
 
 > **让对话，看得见。** TalkSee（语见）——为听障人士在面对面多人对话中提供**实时字幕**的跨平台桌面应用（macOS / Windows）。
 > 实时把周围人的话转成文字，按说话人显示为彩色气泡 + 随机头像；经 LLM 自动整理成通顺书面语，
-> 会话结束后一键生成结构化会议纪要。**MVP 已验证可行，所有功能以 Tauri 2 + Rust engine + Python sherpa-onnx 落地。**
+> 会话结束后一键生成结构化会议纪要。**已正式发布（v0.4.0），所有功能以 Tauri 2 + Rust engine + Python sherpa-onnx 落地。**
 
 - 版本：v0.4.0
 - 构建：[![CI](https://github.com/smallmj/talksee/actions/workflows/ci.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/ci.yml) · [![Release](https://github.com/smallmj/talksee/actions/workflows/release.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/release.yml)
@@ -209,7 +209,7 @@ scripts/              setup-runtime / package-runtime / 回归检查脚本
 docs/                 ADR、Ticket 索引、各票实现总结、调研报告
 ```
 
-## 已知边界（MVP）
+## 已知边界（当前版本）
 
 - 安装包未做代码签名/公证（macOS Gatekeeper 与 Windows SmartScreen 会提示，放行方式见「下载与安装」）；Windows 支持应用内自动更新，macOS 未签名故升级走 Releases 页手动下载
 - 仅面对面麦克风采集；不采集系统/在线会议音频；无气泡回放
