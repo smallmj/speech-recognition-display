@@ -15,6 +15,7 @@
 - 构建：[![CI](https://github.com/smallmj/talksee/actions/workflows/ci.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/ci.yml) · [![Release](https://github.com/smallmj/talksee/actions/workflows/release.yml/badge.svg)](https://github.com/smallmj/talksee/actions/workflows/release.yml)
 - 许可：[MIT](LICENSE) · 规格：[Issue #1](https://github.com/smallmj/talksee/issues/1)（已关闭）
 - 实现总结：`docs/T*-implementation-summary.md` · 架构决策见 `docs/adr/`
+- 语言：**[中文](README.md) · [English](README.en.md)** · 更新日志：[CHANGELOG.md](CHANGELOG.md)
 
 ---
 
@@ -176,14 +177,15 @@ TALKSEE_STANDALONE=1 pnpm tauri build     # 正式分发：打入自包含 Pytho
 
 ## 发布新版本
 
-1. 同步版本号：`src-tauri/tauri.conf.json` / `Cargo.toml` / `package.json` 三处一致。
-2. 打 tag 并推送，CI 自动构建 macOS/Windows 安装包并创建**草稿** Release：
+1. 更新 [CHANGELOG.md](CHANGELOG.md)（中英双语，模板见 `docs/release-notes-template.md`）：新增本次版本的全部更新条目，并同步版本标题。
+2. 同步版本号：`src-tauri/tauri.conf.json` / `Cargo.toml` / `package.json` 三处一致。
+3. 打 tag 并推送，CI 自动构建 macOS/Windows 安装包并创建**草稿** Release：
 
    ```bash
    git tag v0.4.0 && git push origin v0.4.0
    ```
 
-3. 到 GitHub Releases 检查草稿、确认无误后点发布。
+4. 到 GitHub Releases 检查草稿、确认无误后点发布。
 
 工作流 [`.github/workflows/release.yml`](.github/workflows/release.yml)：macOS（arm64/x64）出 DMG、
 Windows（x64）出 NSIS；tag 触发，也支持仓库页手动触发（Actions → Release → Run workflow）。
