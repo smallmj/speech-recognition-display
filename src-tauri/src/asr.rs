@@ -134,6 +134,43 @@ impl SherpaAsr {
             });
         }
 
+        // -- 等待 sidecar 确认加载模型（started 事件）--
+        // 若模型与当前 sherpa-onnx 不兼容，sidecar 会在初始化阶段崩溃（例如 X-ASR
+        // 的 ONNX 缺 encoder_dims 元数据导致 segfault），此时既无 started 也无
+        // error，stdout 直接 EOF。若不在此拦截，壳层会误报「本地 ASR 已启动」却
+        // 一个字都识别不出来（静默无声故障，用户误以为麦克风没声音）。
+        {
+            let status = Arc::clone(&status);
+            let last_error = Arc::clone(&last_error);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                match status.load(Ordering::SeqCst) {
+                    ST_STARTED => break,
+                    ST_ERROR => {
+                        let msg = last_error.lock().unwrap().clone().unwrap_or_else(|| "未知错误".to_string());
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(format!("sidecar 加载模型失败（{}）：{msg}", model_dir.display()));
+                    }
+                    ST_STOPPED => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(format!(
+                            "sidecar 在加载 ASR 模型时退出（{}），模型可能不兼容当前 sherpa-onnx 版本",
+                            model_dir.display()
+                        ));
+                    }
+                    _ => {}
+                }
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("sidecar 启动超时（{}），模型加载过慢或已卡死", model_dir.display()));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+
         // -- 麦克风 → stdin 写线程 --
         let (tx, rx) = mpsc::channel::<Vec<f32>>();
         let (mic, src_rate) = crate::audio::start_mic_capture(tx)?;
